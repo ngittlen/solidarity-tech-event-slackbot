@@ -145,8 +145,8 @@ function formatHeaderDateRange(now: Date, daysAhead: number): string {
 	return `${SHORT_DATE.format(now)} – ${SHORT_DATE.format(end)}`;
 }
 
-function eventTypeLabel(eventType?: string): string {
-	switch (eventType?.toLowerCase()) {
+function eventTypeLabel(eventType: string): string {
+	switch (eventType) {
 		case "in_person":
 		case "in-person":
 			return "🏢 In Person";
@@ -215,12 +215,11 @@ function buildBlocks(
 
 	const eventBlocks: (KnownBlock | SlackBlock)[] = [];
 	for (const event of visibleEvents) {
-		const titleText = event.event_page_url
-			? `*<${event.event_page_url}|${event.title}>*`
-			: `*${event.title}*`;
+		const titleText = `*<${event.event_page_url!}|${event.title}>*`;
 
-		const typeLabel = eventTypeLabel(event.event_type);
-		const isVirtual = ["virtual", "online"].includes(event.event_type?.toLowerCase() ?? "");
+		const normalizedType = event.event_type?.toLowerCase() ?? "";
+		const typeLabel = eventTypeLabel(normalizedType);
+		const isVirtual = normalizedType === "virtual" || normalizedType === "online";
 
 		const sessionLines = event.event_sessions.map((session) => {
 			const startDate = new Date(session.start_time);
