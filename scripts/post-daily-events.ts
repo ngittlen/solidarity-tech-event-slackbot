@@ -40,27 +40,6 @@ interface SolidarityEventsResponse {
 	data: SolidarityEvent[];
 }
 
-// Flattened representation used for filtering and display
-interface DisplaySession {
-	eventId: number;
-	sessionId: number;
-	eventTitle: string;
-	start_time: string;
-	end_time: string;
-	location?: string;
-	event_type?: string;
-	url?: string;
-}
-
-// Sessions grouped back under their parent event
-interface GroupedEvent {
-	eventId: number;
-	eventTitle: string;
-	url?: string;
-	event_type?: string;
-	sessions: DisplaySession[];
-}
-
 // ---------------------------------------------------------------------------
 // API helpers
 // ---------------------------------------------------------------------------
@@ -105,58 +84,30 @@ async function fetchAllEvents(chapterId: number): Promise<SolidarityEvent[]> {
 // Filtering and sorting
 // ---------------------------------------------------------------------------
 
-function flattenAndFilterSessions(
+function filterAndSortEvents(
 	events: SolidarityEvent[],
 	daysAhead: number,
-): DisplaySession[] {
+): SolidarityEvent[] {
 	const now = Date.now();
 	const cutoff = now + daysAhead * 24 * 60 * 60 * 1000;
 
-	const sessions: DisplaySession[] = [];
-
-	for (const event of events) {
-		if (!event.event_page_url) continue;
-		for (const session of event.event_sessions ?? []) {
-			const t = new Date(session.start_time).getTime();
-			if (t >= now && t <= cutoff) {
-				sessions.push({
-					eventId: event.id,
-					sessionId: session.id,
-					eventTitle: event.title,
-					start_time: session.start_time,
-					end_time: session.end_time,
-					location: session.location_address || session.location_name || undefined,
-					event_type: event.event_type,
-					url: event.event_page_url ?? undefined,
-				});
-			}
-		}
-	}
-
-	return sessions.sort(
-		(a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
-	);
-}
-
-function groupSessionsByEvent(sessions: DisplaySession[]): GroupedEvent[] {
-	const map = new Map<number, GroupedEvent>();
-	for (const session of sessions) {
-		let group = map.get(session.eventId);
-		if (!group) {
-			group = {
-				eventId: session.eventId,
-				eventTitle: session.eventTitle,
-				url: session.url,
-				event_type: session.event_type,
-				sessions: [],
-			};
-			map.set(session.eventId, group);
-		}
-		group.sessions.push(session);
-	}
-	// Map insertion order preserves the sort from flattenAndFilterSessions
-	// (earliest session per event comes first)
-	return Array.from(map.values());
+	return events
+		.filter((event) => event.event_page_url)
+		.map((event) => ({
+			...event,
+			event_sessions: (event.event_sessions ?? [])
+				.filter((s) => {
+					const t = new Date(s.start_time).getTime();
+					return t >= now && t <= cutoff;
+				})
+				.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()),
+		}))
+		.filter((event) => event.event_sessions.length > 0)
+		.sort(
+			(a, b) =>
+				new Date(a.event_sessions[0].start_time).getTime() -
+				new Date(b.event_sessions[0].start_time).getTime(),
+		);
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +171,7 @@ const MAX_GROUPS = 23;
 
 function buildBlocks(
 	chapterName: string,
-	groups: GroupedEvent[],
+	events: SolidarityEvent[],
 	daysAhead: number,
 ): (KnownBlock | SlackBlock)[] {
 	const now = new Date();
@@ -245,7 +196,7 @@ function buildBlocks(
 		],
 	};
 
-	if (groups.length === 0) {
+	if (events.length === 0) {
 		return [
 			headerBlock,
 			subtitleBlock,
@@ -259,24 +210,26 @@ function buildBlocks(
 		];
 	}
 
-	const overflow = groups.length > MAX_GROUPS ? groups.length - MAX_GROUPS : 0;
-	const visibleGroups = overflow > 0 ? groups.slice(0, MAX_GROUPS) : groups;
+	const overflow = events.length > MAX_GROUPS ? events.length - MAX_GROUPS : 0;
+	const visibleEvents = overflow > 0 ? events.slice(0, MAX_GROUPS) : events;
 
 	const eventBlocks: (KnownBlock | SlackBlock)[] = [];
-	for (const group of visibleGroups) {
-		const titleText = group.url
-			? `*<${group.url}|${group.eventTitle}>*`
-			: `*${group.eventTitle}*`;
+	for (const event of visibleEvents) {
+		const titleText = event.event_page_url
+			? `*<${event.event_page_url}|${event.title}>*`
+			: `*${event.title}*`;
 
-		const sessionLines = group.sessions.map((session) => {
+		const typeLabel = eventTypeLabel(event.event_type);
+		const isVirtual = ["virtual", "online"].includes(event.event_type?.toLowerCase() ?? "");
+
+		const sessionLines = event.event_sessions.map((session) => {
 			const startDate = new Date(session.start_time);
 			const endDate = new Date(session.end_time);
 			const timeStr = formatDateRange(startDate, endDate);
-			const typeLabel = eventTypeLabel(session.event_type);
+			const location = session.location_address || session.location_name || undefined;
 
-			const isVirtual = ["virtual", "online"].includes(session.event_type?.toLowerCase() ?? "");
 			let line = `📅 *${timeStr}*`;
-			if (session.location && !isVirtual) line += `   📍 _${session.location}_`;
+			if (location && !isVirtual) line += `   📍 _${location}_`;
 			if (typeLabel) line += `   ${typeLabel}`;
 			return line;
 		});
@@ -324,16 +277,16 @@ async function postChapter(
 ): Promise<void> {
 	console.log(`Fetching events for chapter: ${mapping.name} (${mapping.chapterId})`);
 	const allEvents = await fetchAllEvents(mapping.chapterId);
-	const sessions = flattenAndFilterSessions(allEvents, daysAhead);
-	const groups = groupSessionsByEvent(sessions);
+	const events = filterAndSortEvents(allEvents, daysAhead);
+	const totalSessions = events.reduce((sum, e) => sum + e.event_sessions.length, 0);
 	console.log(
-		`  → ${allEvents.length} total events fetched, ${groups.length} event(s) with ${sessions.length} session(s) in window`,
+		`  → ${allEvents.length} total events fetched, ${events.length} event(s) with ${totalSessions} session(s) in window`,
 	);
 
-	const blocks = buildBlocks(mapping.name, groups, daysAhead);
+	const blocks = buildBlocks(mapping.name, events, daysAhead);
 	const fallbackText =
-		groups.length > 0
-			? `📅 Upcoming Events — ${mapping.name}: ${groups.length} event(s) in the next ${daysAhead} days.`
+		events.length > 0
+			? `📅 Upcoming Events — ${mapping.name}: ${events.length} event(s) in the next ${daysAhead} days.`
 			: `📅 Upcoming Events — ${mapping.name}: No upcoming events in the next ${daysAhead} days.`;
 
 	await slack.chat.postMessage({
