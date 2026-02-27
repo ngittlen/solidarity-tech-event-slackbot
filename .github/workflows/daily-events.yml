@@ -1,0 +1,22 @@
+name: Daily Events Digest
+on:
+  schedule:
+    - cron: '0 14 * * *'  # 9 AM ET (UTC-5) — adjust for DST as needed
+  workflow_dispatch:        # Allow manual runs from GitHub UI for testing
+
+jobs:
+  post-events:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx tsx scripts/post-daily-events.ts
+        env:
+          SOLIDARITY_TECH_API_KEY: ${{ secrets.SOLIDARITY_TECH_API_KEY }}
+          CHAPTER_CHANNEL_MAPPING: ${{ secrets.CHAPTER_CHANNEL_MAPPING }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          EVENTS_DAYS_AHEAD: '7'
