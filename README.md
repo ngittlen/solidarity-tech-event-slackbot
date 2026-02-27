@@ -123,7 +123,7 @@ cp .env.sample .env.local
 SLACK_BOT_TOKEN=xoxb-...
 SOLIDARITY_TECH_API_KEY=your-api-key
 CHAPTER_CHANNEL_MAPPING=[{"chapterId":123,"channelId":"C0123456789","name":"Washtenaw County"}]
-EVENTS_DAYS_AHEAD=7
+EVENTS_DAYS_AHEAD=3
 ```
 
 ### Run the script
