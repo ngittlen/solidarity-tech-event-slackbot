@@ -1,33 +1,31 @@
 {
-  "name": "bolt-ts-starter-template",
+  "name": "solidarity-tech-event-slackbot",
   "version": "1.0.0",
-  "description": "A scaffold template for Slack apps",
-  "main": "dist/app.js",
+  "description": "A script for posting solidarity.tech events in slack",
   "type": "module",
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
-    "start": "node ./dist/app.js",
-    "lint": "npx @biomejs/biome check *.ts listeners tests",
-    "lint:fix": "npx @biomejs/biome check --write *.ts listeners tests",
-    "test": "npm run build && npm run lint && node --import tsx --test"
+    "start": "npx tsx scripts/post-daily-events.ts"
   },
-  "author": "Slack Technologies, LLC",
+  "author": "Nathaniel Gittlen",
   "license": "MIT",
   "keywords": [
+    "solidarity.tech",
     "slack",
-    "bolt",
     "slackapi",
     "typescript"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/slack-samples/bolt-ts-starter-template.git"
+    "url": "https://github.com/ngittlen/solidarity-tech-event-slackbot.git"
   },
   "bugs": {
-    "url": "https://github.com/slack-samples/bolt-ts-starter-template/issues"
+    "url": "https://github.com/ngittlen/solidarity-tech-event-slackbot/issues"
   },
   "dependencies": {
+    "@slack/types": "^2.14.0",
+    "@slack/web-api": "^7.8.0",
     "dotenv": "~17.3.1"
   },
   "devDependencies": {
