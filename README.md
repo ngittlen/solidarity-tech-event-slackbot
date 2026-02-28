@@ -86,14 +86,15 @@ A JSON array where each object has:
 
 ```json
 [
-  { "chapterId": 123, "channelId": "C0123456789", "name": "Washtenaw County" },
-  { "chapterId": 456, "channelId": "C9876543210", "name": "Wayne County" }
+  { "chapterId": 123, "channelId": "C0123456789", "name": "Washtenaw County", "pageUrl": "https://example.com/washtenaw-county-chapter" },
+  { "chapterId": 456, "channelId": "C9876543210", "name": "Wayne County", "pageUrl": "https://example.com/wayne-county-chapter" }
 ]
 ```
 
 - `chapterId` — numeric ID of the solidarity.tech chapter
 - `channelId` — Slack channel ID to post to
-- `name` — display name used in the message header
+- `name` — display name used in the message header (links to `pageUrl`)
+- `pageUrl` — URL the chapter name links to in the posted message
 
 ### 4. (Optional) Adjust the lookahead window
 
@@ -122,7 +123,7 @@ cp .env.sample .env.local
 ```
 SLACK_BOT_TOKEN=xoxb-...
 SOLIDARITY_TECH_API_KEY=your-api-key
-CHAPTER_CHANNEL_MAPPING=[{"chapterId":123,"channelId":"C0123456789","name":"Washtenaw County"}]
+CHAPTER_CHANNEL_MAPPING=[{"chapterId":123,"channelId":"C0123456789","name":"Washtenaw County","pageUrl":"https://example.com/washtenaw-county-chapter"}]
 EVENTS_DAYS_AHEAD=3
 ```
 

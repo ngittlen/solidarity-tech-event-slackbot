@@ -16,6 +16,7 @@ interface ChapterMapping {
 	chapterId: number;
 	channelId: string;
 	name: string;
+	pageUrl: string;
 }
 
 // Actual shape returned by the solidarity.tech /v1/events endpoint
@@ -171,6 +172,7 @@ const MAX_GROUPS = 23;
 
 function buildBlocks(
 	chapterName: string,
+	chapterUrl: string,
 	events: SolidarityEvent[],
 	daysAhead: number,
 ): (KnownBlock | SlackBlock)[] {
@@ -191,7 +193,7 @@ function buildBlocks(
 		elements: [
 			{
 				type: "mrkdwn",
-				text: `Next ${daysAhead} days · ${dateRange}`,
+				text: `Next ${daysAhead} days · ${dateRange} · <${chapterUrl}|All Events>`,
 			},
 		],
 	};
@@ -274,7 +276,9 @@ async function postChapter(
 	mapping: ChapterMapping,
 	daysAhead: number,
 ): Promise<void> {
-	console.log(`Fetching events for chapter: ${mapping.name} (${mapping.chapterId})`);
+	const displayName = mapping.name;
+	const pageUrl = mapping.pageUrl;
+	console.log(`Fetching events for chapter: ${displayName} (${mapping.chapterId})`);
 	const allEvents = await fetchAllEvents(mapping.chapterId);
 	const events = filterAndSortEvents(allEvents, daysAhead);
 	const totalSessions = events.reduce((sum, e) => sum + e.event_sessions.length, 0);
@@ -282,11 +286,11 @@ async function postChapter(
 		`  → ${allEvents.length} total events fetched, ${events.length} event(s) with ${totalSessions} session(s) in window`,
 	);
 
-	const blocks = buildBlocks(mapping.name, events, daysAhead);
+	const blocks = buildBlocks(displayName, pageUrl, events, daysAhead);
 	const fallbackText =
 		events.length > 0
-			? `📅 Upcoming Events — ${mapping.name}: ${events.length} event(s) in the next ${daysAhead} days.`
-			: `📅 Upcoming Events — ${mapping.name}: No upcoming events in the next ${daysAhead} days.`;
+			? `📅 Upcoming Events — ${displayName}: ${events.length} event(s) in the next ${daysAhead} days.`
+			: `📅 Upcoming Events — ${displayName}: No upcoming events in the next ${daysAhead} days.`;
 
 	await slack.chat.postMessage({
 		channel: mapping.channelId,
