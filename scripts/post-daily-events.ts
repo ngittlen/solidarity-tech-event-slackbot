@@ -35,6 +35,7 @@ interface SolidarityEvent {
 	event_type: string;
 	event_sessions: EventSession[];
 	event_page_url: string | null;
+	tags: string[];
 }
 
 interface SolidarityEventsResponse {
@@ -93,7 +94,7 @@ function filterAndSortEvents(
 	const cutoff = now + daysAhead * 24 * 60 * 60 * 1000;
 
 	return events
-		.filter((event) => event.event_page_url)
+		.filter((event) => event.event_page_url && !event.tags.includes("slack-exclude"))
 		.map((event) => ({
 			...event,
 			event_sessions: (event.event_sessions ?? [])
