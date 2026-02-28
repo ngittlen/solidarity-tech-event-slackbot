@@ -46,6 +46,13 @@ interface SolidarityEventsResponse {
 // API helpers
 // ---------------------------------------------------------------------------
 
+// Rate limit: 60 requests per 30 seconds (2 req/s). We delay 1s between
+// requests to stay comfortably within limits.
+// See https://www.solidarity.tech/reference/solidarity-tech-api#throttling-rules
+// for the rate limits
+const API_DELAY_MS = 1000;
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function fetchAllEvents(chapterId: number): Promise<SolidarityEvent[]> {
 	const allEvents: SolidarityEvent[] = [];
 	let page = 1;
@@ -77,6 +84,7 @@ async function fetchAllEvents(chapterId: number): Promise<SolidarityEvent[]> {
 
 		if (events.length < limit) break;
 		page++;
+		await delay(API_DELAY_MS);
 	}
 
 	return allEvents;
@@ -338,6 +346,8 @@ async function main(): Promise<void> {
 			console.error(`Failed to post events for chapter ${mapping.name}:`, err);
 			anyFailed = true;
 		}
+		// Use a delay between fetching each chapter to avoid solidarity.tech api rate limits
+		await delay(API_DELAY_MS);
 	}
 
 	if (anyFailed) {

@@ -8,9 +8,10 @@ Every day at 9 AM ET, the workflow runs `scripts/post-daily-events.ts`, which:
 
 1. **Fetches events** from the solidarity.tech API for each configured chapter (paginated, 100 events per page)
 2. **Filters** to events that have a public event page URL, are not tagged `slack-exclude`, and have at least one session starting within the configured lookahead window (default: 3 days)
-3. **Sorts** events chronologically by their earliest upcoming session
-4. **Builds a Slack Block Kit message** with a header, date range subtitle, and one section per event showing the title (linked to the event page), session time(s), location, and event type (in-person / virtual / hybrid)
-5. **Posts** the message to the mapped Slack channel for each chapter
+3. **Rate limits** requests to the solidarity.tech API at 1 request per second (well within the 2 req/s limit) with a delay between each chapter to avoid throttling
+4. **Sorts** events chronologically by their earliest upcoming session
+5. **Builds a Slack Block Kit message** with a header, date range subtitle, and one section per event showing the title (linked to the event page), session time(s), location, and event type (in-person / virtual / hybrid)
+6. **Posts** the message to the mapped Slack channel for each chapter
 
 If there are no upcoming events, a "no upcoming events" message is posted instead. If more than 23 events fall in the window, the first 23 are shown with a note indicating how many were omitted (Slack has a 50-block-per-message limit).
 
