@@ -68,7 +68,7 @@ The response is a paginated JSON object. Each chapter in the `data` array has an
 
 Use the `id` field as the `chapterId` in your mapping. If you have more than 100 chapters, paginate using the `_offset` parameter (e.g. `?_limit=100&_offset=100`).
 
-**Channel ID**: right-click a channel in Slack → "Copy link" — the ID is the last path segment (e.g. `C0123456789`)
+**Channel ID**: look in the channel details or right-click a channel in Slack → "Copy link" — the ID is the last path segment (e.g. `C0123456789`)
 
 ### 3. Configure GitHub Actions secrets
 
