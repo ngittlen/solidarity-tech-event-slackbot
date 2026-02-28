@@ -18,7 +18,7 @@ If there are no upcoming events, a "no upcoming events" message is posted instea
 
 ```
 📅 Upcoming Events — Washtenaw County
-Next 7 days · Feb 27 – Mar 6
+Next 3 days · Feb 27 – Mar 2 · All Events ↗
 
 *<https://solidarity.tech/events/123|Monthly Organizing Meeting>*
 📅 *Sat, Mar 1 · 10:00–11:30 AM ET*   📍 _123 Main St, Ann Arbor, MI_   🏢 In Person
@@ -93,12 +93,12 @@ A JSON array where each object has:
 
 - `chapterId` — numeric ID of the solidarity.tech chapter
 - `channelId` — Slack channel ID to post to
-- `name` — display name used in the message header (links to `pageUrl`)
-- `pageUrl` — URL the chapter name links to in the posted message
+- `name` — display name used in the message header
+- `pageUrl` — URL for the "All Events" link shown in the message subtitle
 
 ### 4. (Optional) Adjust the lookahead window
 
-The `EVENTS_DAYS_AHEAD` variable in `.github/workflows/daily-events.yml` controls how many days ahead to look for events. It defaults to `7`. Change it directly in the workflow file, or make it a secret/variable if you want to configure it without a code change.
+The `EVENTS_DAYS_AHEAD` variable in `.github/workflows/daily-events.yml` controls how many days ahead to look for events. It defaults to `3`. Change it directly in the workflow file, or make it a secret/variable if you want to configure it without a code change.
 
 ### 5. (Optional) Adjust the posting time
 
