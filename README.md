@@ -7,7 +7,7 @@ A GitHub Actions workflow that pulls upcoming events from the [solidarity.tech](
 Every day at 9 AM ET, the workflow runs `scripts/post-daily-events.ts`, which:
 
 1. **Fetches events** from the solidarity.tech API for each configured chapter (paginated, 100 events per page)
-2. **Filters** to events that have a public event page URL and at least one session starting within the configured lookahead window (default: 7 days)
+2. **Filters** to events that have a public event page URL and at least one session starting within the configured lookahead window (default: 3 days)
 3. **Sorts** events chronologically by their earliest upcoming session
 4. **Builds a Slack Block Kit message** with a header, date range subtitle, and one section per event showing the title (linked to the event page), session time(s), location, and event type (in-person / virtual / hybrid)
 5. **Posts** the message to the mapped Slack channel for each chapter
