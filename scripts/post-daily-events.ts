@@ -9,7 +9,6 @@ dotenv.config({ path: '.env.local' });
 
 const SOLIDARITY_TECH_API_KEY = process.env.SOLIDARITY_TECH_API_KEY ?? "";
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? "";
-const EVENTS_DAYS_AHEAD = Number(process.env.EVENTS_DAYS_AHEAD ?? "7");
 const CHAPTER_CHANNEL_MAPPING_RAW = process.env.CHAPTER_CHANNEL_MAPPING ?? "";
 
 interface ChapterMapping {
@@ -91,15 +90,90 @@ async function fetchAllEvents(chapterId: number): Promise<SolidarityEvent[]> {
 }
 
 // ---------------------------------------------------------------------------
+// Week helpers
+// ---------------------------------------------------------------------------
+
+function isMonday(): boolean {
+	return new Date().getDay() === 1;
+}
+
+function getMondayOfCurrentWeek(): Date {
+	const now = new Date();
+	const day = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+	const daysFromMonday = day === 0 ? 6 : day - 1;
+	const monday = new Date(now);
+	monday.setDate(now.getDate() - daysFromMonday);
+	monday.setHours(0, 0, 0, 0);
+	return monday;
+}
+
+function getSundayOfCurrentWeek(): Date {
+	const monday = getMondayOfCurrentWeek();
+	const sunday = new Date(monday);
+	sunday.setDate(monday.getDate() + 6);
+	sunday.setHours(23, 59, 59, 999);
+	return sunday;
+}
+
+// ---------------------------------------------------------------------------
+// Fetch previously posted event URLs from Slack channel history
+// ---------------------------------------------------------------------------
+
+async function fetchPostedEventUrls(
+	slack: WebClient,
+	channelId: string,
+): Promise<Set<string>> {
+	const monday = getMondayOfCurrentWeek();
+	const oldest = String(monday.getTime() / 1000);
+
+	const allMessages: Record<string, unknown>[] = [];
+	let cursor: string | undefined;
+
+	do {
+		const result = await slack.conversations.history({
+			channel: channelId,
+			oldest,
+			limit: 200,
+			...(cursor ? { cursor } : {}),
+		});
+		allMessages.push(...((result.messages ?? []) as Record<string, unknown>[]));
+		cursor = (result.response_metadata as Record<string, string> | undefined)?.next_cursor;
+	} while (cursor);
+
+	const urls = new Set<string>();
+	// Matches Slack mrkdwn links: <url> or <url|label>
+	const urlPattern = /<(https?:\/\/[^|>\s]+)[|>]/g;
+
+	for (const msg of allMessages) {
+		// Only examine messages posted by bots (our own posts)
+		if (!msg['bot_id'] && msg['subtype'] !== 'bot_message') continue;
+
+		const blocks = msg['blocks'];
+		if (Array.isArray(blocks)) {
+			for (const block of blocks as Record<string, unknown>[]) {
+				if (block['type'] === 'section') {
+					const text = (block['text'] as Record<string, string> | undefined)?.['text'] ?? '';
+					for (const match of text.matchAll(urlPattern)) {
+						urls.add(match[1]);
+					}
+				}
+			}
+		}
+	}
+
+	console.log(`  → Found ${urls.size} previously posted event URL(s) in channel this week`);
+	return urls;
+}
+
+// ---------------------------------------------------------------------------
 // Filtering and sorting
 // ---------------------------------------------------------------------------
 
 function filterAndSortEvents(
 	events: SolidarityEvent[],
-	daysAhead: number,
+	cutoffMs: number,
 ): SolidarityEvent[] {
 	const now = Date.now();
-	const cutoff = now + daysAhead * 24 * 60 * 60 * 1000;
 
 	return events
 		.filter((event) => event.event_page_url && !event.tags.includes("slack-exclude"))
@@ -108,7 +182,7 @@ function filterAndSortEvents(
 			event_sessions: (event.event_sessions ?? [])
 				.filter((s) => {
 					const t = new Date(s.start_time).getTime();
-					return t >= now && t <= cutoff;
+					return t >= now && t <= cutoffMs;
 				})
 				.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()),
 		}))
@@ -150,9 +224,10 @@ function formatDateRange(startDate: Date, endDate: Date): string {
 	return `${weekday}, ${date} · ${startTimeShort}–${endTime}`;
 }
 
-function formatHeaderDateRange(now: Date, daysAhead: number): string {
-	const end = new Date(now.getTime() + daysAhead * 24 * 60 * 60 * 1000);
-	return `${SHORT_DATE.format(now)} – ${SHORT_DATE.format(end)}`;
+function formatWeekRange(): string {
+	const monday = getMondayOfCurrentWeek();
+	const sunday = getSundayOfCurrentWeek();
+	return `${SHORT_DATE.format(monday)} – ${SHORT_DATE.format(sunday)}`;
 }
 
 function eventTypeLabel(eventType: string): string {
@@ -183,16 +258,23 @@ function buildBlocks(
 	chapterName: string,
 	chapterUrl: string,
 	events: SolidarityEvent[],
-	daysAhead: number,
+	isWeeklyDigest: boolean,
 ): (KnownBlock | SlackBlock)[] {
-	const now = new Date();
-	const dateRange = formatHeaderDateRange(now, daysAhead);
+	const weekRange = formatWeekRange();
+
+	const headerText = isWeeklyDigest
+		? `📅 Upcoming Events — ${chapterName}`
+		: `🆕 New Events This Week — ${chapterName}`;
+
+	const subtitleText = isWeeklyDigest
+		? `This week · ${weekRange} · <${chapterUrl}|All Events>`
+		: `New this week · ${weekRange} · <${chapterUrl}|All Events>`;
 
 	const headerBlock = {
 		type: "header",
 		text: {
 			type: "plain_text",
-			text: `📅 Upcoming Events — ${chapterName}`,
+			text: headerText,
 			emoji: true,
 		},
 	};
@@ -202,7 +284,7 @@ function buildBlocks(
 		elements: [
 			{
 				type: "mrkdwn",
-				text: `Next ${daysAhead} days · ${dateRange} · <${chapterUrl}|All Events>`,
+				text: subtitleText,
 			},
 		],
 	};
@@ -215,7 +297,7 @@ function buildBlocks(
 				type: "section",
 				text: {
 					type: "mrkdwn",
-					text: `No upcoming events in the next ${daysAhead} days.`,
+					text: `No upcoming events this week.`,
 				},
 			},
 		];
@@ -267,7 +349,7 @@ function buildBlocks(
 			elements: [
 				{
 					type: "mrkdwn",
-					text: `_+${overflow} more event${overflow === 1 ? "" : "s"} later this week not shown._`,
+					text: `_+${overflow} more event${overflow === 1 ? "" : "s"} this week not shown._`,
 				},
 			],
 		});
@@ -283,23 +365,43 @@ function buildBlocks(
 async function postChapter(
 	slack: WebClient,
 	mapping: ChapterMapping,
-	daysAhead: number,
+	isWeeklyDigest: boolean,
 ): Promise<void> {
 	const displayName = mapping.name;
 	const pageUrl = mapping.pageUrl;
+
+	// On Mondays post 7 days ahead; other days filter to end of the current week.
+	let cutoffMs: number;
+	if (isWeeklyDigest) {
+		cutoffMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
+	} else {
+		cutoffMs = getSundayOfCurrentWeek().getTime();
+	}
+
 	console.log(`Fetching events for chapter: ${displayName} (${mapping.chapterId})`);
 	const allEvents = await fetchAllEvents(mapping.chapterId);
-	const events = filterAndSortEvents(allEvents, daysAhead);
+	let events = filterAndSortEvents(allEvents, cutoffMs);
 	const totalSessions = events.reduce((sum, e) => sum + e.event_sessions.length, 0);
 	console.log(
 		`  → ${allEvents.length} total events fetched, ${events.length} event(s) with ${totalSessions} session(s) in window`,
 	);
 
-	const blocks = buildBlocks(displayName, pageUrl, events, daysAhead);
+	if (!isWeeklyDigest) {
+		// Exclude events whose URLs already appeared in bot messages this week
+		const postedUrls = await fetchPostedEventUrls(slack, mapping.channelId);
+		events = events.filter((e) => !postedUrls.has(e.event_page_url!));
+		if (events.length === 0) {
+			console.log(`  → No new events to post for ${displayName}, skipping`);
+			return;
+		}
+		console.log(`  → ${events.length} new event(s) not yet posted`);
+	}
+
+	const blocks = buildBlocks(displayName, pageUrl, events, isWeeklyDigest);
 	const fallbackText =
 		events.length > 0
-			? `📅 Upcoming Events — ${displayName}: ${events.length} event(s) in the next ${daysAhead} days.`
-			: `📅 Upcoming Events — ${displayName}: No upcoming events in the next ${daysAhead} days.`;
+			? `📅 Upcoming Events — ${displayName}: ${events.length} event(s) this week.`
+			: `📅 Upcoming Events — ${displayName}: No upcoming events this week.`;
 
 	await slack.chat.postMessage({
 		channel: mapping.channelId,
@@ -336,12 +438,15 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
+	const weeklyDigest = isMonday();
+	console.log(`Run mode: ${weeklyDigest ? "weekly digest (Monday)" : "mid-week new events check"}`);
+
 	const slack = new WebClient(SLACK_BOT_TOKEN);
 	let anyFailed = false;
 
 	for (const mapping of mappings) {
 		try {
-			await postChapter(slack, mapping, EVENTS_DAYS_AHEAD);
+			await postChapter(slack, mapping, weeklyDigest);
 		} catch (err) {
 			console.error(`Failed to post events for chapter ${mapping.name}:`, err);
 			anyFailed = true;

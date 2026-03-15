@@ -1,33 +1,59 @@
 # Solidarity Tech Event Slackbot
 
-A GitHub Actions workflow that pulls upcoming events from the [solidarity.tech](https://solidarity.tech) API and posts a daily digest to one or more Slack channels — one post per configured chapter.
+A GitHub Actions workflow that pulls upcoming events from the [solidarity.tech](https://solidarity.tech) API and posts them to one or more Slack channels — one post per configured chapter.
 
 ## How it works
 
-Every day at 9 AM ET, the workflow runs `scripts/post-daily-events.ts`, which:
+Every day at 9 AM ET, the workflow runs `scripts/post-daily-events.ts`. The behavior depends on the day of the week:
+
+### Monday — weekly digest
+
+On Mondays the script posts a full digest of all events for the coming 7 days to each configured channel.
+
+### Tuesday–Sunday — new events only
+
+On other days the script checks whether any events were added to the current week's schedule *after* Monday's digest was posted. It does this by:
+
+1. Reading the channel's Slack message history since Monday
+2. Extracting all event URLs that already appear in bot messages
+3. Filtering the current event list down to events whose URLs have **not** been posted yet
+
+If no new events are found, nothing is posted to that channel. If new events are found, a short "🆕 New Events This Week" message is posted containing only those events.
+
+### Common steps (both modes)
 
 1. **Fetches events** from the solidarity.tech API for each configured chapter (paginated, 100 events per page)
-2. **Filters** to events that have a public event page URL, are not tagged `slack-exclude`, and have at least one session starting within the configured lookahead window (default: 3 days)
+2. **Filters** to events that have a public event page URL, are not tagged `slack-exclude`, and have at least one session within the posting window
 3. **Rate limits** requests to the solidarity.tech API at 1 request per second (well within the 2 req/s limit) with a delay between each chapter to avoid throttling
 4. **Sorts** events chronologically by their earliest upcoming session
-5. **Builds a Slack Block Kit message** with a header, date range subtitle, and one section per event showing the title (linked to the event page), session time(s), location, and event type (in-person / virtual / hybrid)
+5. **Builds a Slack Block Kit message** with a header, week date range, and one section per event showing the title (linked to the event page), session time(s), location, and event type (in-person / virtual / hybrid)
 6. **Posts** the message to the mapped Slack channel for each chapter
 
-If there are no upcoming events, a "no upcoming events" message is posted instead. If more than 23 events fall in the window, the first 23 are shown with a note indicating how many were omitted (Slack has a 50-block-per-message limit).
+If more than 23 events fall in the window, the first 23 are shown with a note indicating how many were omitted (Slack has a 50-block-per-message limit).
 
-### Example Slack message
+### Example Slack messages
 
+**Monday digest:**
 ```
 📅 Upcoming Events — Washtenaw County
-Next 3 days · Feb 27 – Mar 2 · All Events ↗
+This week · Mar 10 – Mar 16 · All Events ↗
 
 *<https://solidarity.tech/events/123|Monthly Organizing Meeting>*
-📅 *Sat, Mar 1 · 10:00–11:30 AM ET*   📍 _123 Main St, Ann Arbor, MI_   🏢 In Person
+📅 *Sat, Mar 15 · 10:00–11:30 AM ET*   📍 _123 Main St, Ann Arbor, MI_   🏢 In Person
 
 ────────────────────────────────
 
 *<https://solidarity.tech/events/456|New Member Orientation>*
-📅 *Wed, Mar 5 · 7:00–8:00 PM ET*   💻 Virtual
+📅 *Wed, Mar 12 · 7:00–8:00 PM ET*   💻 Virtual
+```
+
+**Mid-week new event alert:**
+```
+🆕 New Events This Week — Washtenaw County
+New this week · Mar 10 – Mar 16 · All Events ↗
+
+*<https://solidarity.tech/events/789|Emergency Town Hall>*
+📅 *Thu, Mar 13 · 6:00–7:30 PM ET*   💻 Virtual
 ```
 
 ## Setup
@@ -35,13 +61,16 @@ Next 3 days · Feb 27 – Mar 2 · All Events ↗
 ### Prerequisites
 
 - A [solidarity.tech](https://solidarity.tech) account with API access
-- A Slack app with the `chat:write` bot scope installed to your workspace
+- A Slack app with the `chat:write` and `channels:history` (or `groups:history` for private channels) bot scopes installed to your workspace
 - A GitHub repository to host the workflow
 
 ### 1. Create a Slack app
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app
-2. Under **OAuth & Permissions**, add the `chat:write` bot scope
+2. Under **OAuth & Permissions**, add the following bot scopes:
+   - `chat:write` — to post messages
+   - `channels:history` — to read history in public channels (used to detect already-posted events)
+   - `groups:history` — add this too if any target channels are private
 3. Install the app to your workspace
 4. Copy the **Bot User OAuth Token** (starts with `xoxb-`)
 5. Invite the bot to each channel it should post to: `/invite @your-bot-name`
@@ -97,11 +126,7 @@ A JSON array where each object has:
 - `name` — display name used in the message header
 - `pageUrl` — URL for the "All Events" link shown in the message subtitle
 
-### 4. (Optional) Adjust the lookahead window
-
-The `EVENTS_DAYS_AHEAD` variable in `.github/workflows/daily-events.yml` controls how many days ahead to look for events. It defaults to `3`. Change it directly in the workflow file, or make it a secret/variable if you want to configure it without a code change.
-
-### 5. (Optional) Adjust the posting time
+### 4. (Optional) Adjust the posting time
 
 The cron schedule in `.github/workflows/daily-events.yml` defaults to `0 14 * * *` (9 AM ET / UTC-5). Adjust for your timezone or daylight saving time as needed.
 
@@ -125,7 +150,6 @@ cp .env.sample .env.local
 SLACK_BOT_TOKEN=xoxb-...
 SOLIDARITY_TECH_API_KEY=your-api-key
 CHAPTER_CHANNEL_MAPPING=[{"chapterId":123,"channelId":"C0123456789","name":"Washtenaw County","pageUrl":"https://example.com/washtenaw-county-chapter"}]
-EVENTS_DAYS_AHEAD=3
 ```
 
 ### Run the script
@@ -134,7 +158,7 @@ EVENTS_DAYS_AHEAD=3
 npx tsx scripts/post-daily-events.ts
 ```
 
-This will post to the real Slack channels configured in `CHAPTER_CHANNEL_MAPPING`, so point `channelId` to a test channel if you don't want to post to production.
+The script automatically detects whether today is Monday and runs in the appropriate mode. This will post to the real Slack channels configured in `CHAPTER_CHANNEL_MAPPING`, so point `channelId` to a test channel if you don't want to post to production.
 
 ## Project structure
 

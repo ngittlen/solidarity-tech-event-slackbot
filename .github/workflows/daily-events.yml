@@ -20,4 +20,3 @@ jobs:
           SOLIDARITY_TECH_API_KEY: ${{ secrets.SOLIDARITY_TECH_API_KEY }}
           CHAPTER_CHANNEL_MAPPING: ${{ secrets.CHAPTER_CHANNEL_MAPPING }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          EVENTS_DAYS_AHEAD: '3'
