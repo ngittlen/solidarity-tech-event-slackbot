@@ -37,8 +37,15 @@ interface SolidarityEvent {
 	tags: string[];
 }
 
+interface SolidarityEventsMeta {
+	total_count: number;
+	limit: number;
+	offset: number;
+}
+
 interface SolidarityEventsResponse {
 	data: SolidarityEvent[];
+	meta: SolidarityEventsMeta;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,15 +61,15 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function fetchAllEvents(chapterId: number): Promise<SolidarityEvent[]> {
 	const allEvents: SolidarityEvent[] = [];
-	let page = 1;
 	const limit = 100;
+	let offset = 0;
 
 	while (true) {
 		const url = new URL("https://api.solidarity.tech/v1/events");
 		url.searchParams.set("scope_id", String(chapterId));
 		url.searchParams.set("scope_type", "Chapter");
 		url.searchParams.set("_limit", String(limit));
-		url.searchParams.set("_page", String(page));
+		url.searchParams.set("_offset", String(offset));
 
 		const response = await fetch(url.toString(), {
 			headers: {
@@ -81,8 +88,10 @@ async function fetchAllEvents(chapterId: number): Promise<SolidarityEvent[]> {
 		const events = body.data ?? [];
 		allEvents.push(...events);
 
-		if (events.length < limit) break;
-		page++;
+		const totalCount = body.meta?.total_count ?? 0;
+		if (allEvents.length >= totalCount || events.length === 0) break;
+
+		offset += events.length;
 		await delay(API_DELAY_MS);
 	}
 
@@ -431,7 +440,7 @@ async function postChapter(
 		}
 	}
 
-	console.log(`Fetching events for chapter: ${displayName} (${mapping.chapterId})`);
+	console.log(`Fetching events for chapter: ${displayName})`);
 	const allEvents = await fetchAllEvents(mapping.chapterId);
 	let events = filterAndSortEvents(allEvents, cutoffMs);
 	const totalSessions = events.reduce((sum, e) => sum + e.event_sessions.length, 0);
