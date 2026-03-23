@@ -119,6 +119,24 @@ function getSundayOfCurrentWeek(): Date {
 // Fetch previously posted event URLs from Slack channel history
 // ---------------------------------------------------------------------------
 
+const CHANNEL_ACCESS_ERRORS = new Set([
+	"not_in_channel",
+	"channel_not_found",
+	"is_archived",
+	"missing_scope",
+]);
+
+function isChannelAccessError(err: unknown): boolean {
+	if (err && typeof err === "object" && "code" in err) {
+		// @slack/web-api wraps API errors with a `data.error` field
+		const data = (err as Record<string, unknown>)["data"];
+		if (data && typeof data === "object" && "error" in data) {
+			return CHANNEL_ACCESS_ERRORS.has(String((data as Record<string, unknown>)["error"]));
+		}
+	}
+	return false;
+}
+
 async function fetchPostedEventUrls(
 	slack: WebClient,
 	channelId: string,
@@ -163,6 +181,24 @@ async function fetchPostedEventUrls(
 
 	console.log(`  → Found ${urls.size} previously posted event URL(s) in channel this week`);
 	return urls;
+}
+
+async function hasPostedToday(
+	slack: WebClient,
+	channelId: string,
+): Promise<boolean> {
+	const startOfDay = new Date();
+	startOfDay.setHours(0, 0, 0, 0);
+	const oldest = String(startOfDay.getTime() / 1000);
+
+	const result = await slack.conversations.history({
+		channel: channelId,
+		oldest,
+		limit: 100,
+	});
+
+	const messages = (result.messages ?? []) as Record<string, unknown>[];
+	return messages.some((msg) => msg['bot_id'] || msg['subtype'] === 'bot_message');
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +414,23 @@ async function postChapter(
 		cutoffMs = getSundayOfCurrentWeek().getTime();
 	}
 
+	if (isWeeklyDigest) {
+		let alreadyPosted: boolean;
+		try {
+			alreadyPosted = await hasPostedToday(slack, mapping.channelId);
+		} catch (err) {
+			if (isChannelAccessError(err)) {
+				console.warn(`  → Cannot read channel ${displayName} (bot not in channel?), skipping`);
+				return;
+			}
+			throw err;
+		}
+		if (alreadyPosted) {
+			console.log(`  → Already posted to ${displayName} today, skipping`);
+			return;
+		}
+	}
+
 	console.log(`Fetching events for chapter: ${displayName} (${mapping.chapterId})`);
 	const allEvents = await fetchAllEvents(mapping.chapterId);
 	let events = filterAndSortEvents(allEvents, cutoffMs);
@@ -388,7 +441,16 @@ async function postChapter(
 
 	if (!isWeeklyDigest) {
 		// Exclude events whose URLs already appeared in bot messages this week
-		const postedUrls = await fetchPostedEventUrls(slack, mapping.channelId);
+		let postedUrls: Set<string>;
+		try {
+			postedUrls = await fetchPostedEventUrls(slack, mapping.channelId);
+		} catch (err) {
+			if (isChannelAccessError(err)) {
+				console.warn(`  → Cannot read channel ${displayName} (bot not in channel?), skipping`);
+				return;
+			}
+			throw err;
+		}
 		events = events.filter((e) => !postedUrls.has(e.event_page_url!));
 		if (events.length === 0) {
 			console.log(`  → No new events to post for ${displayName}, skipping`);
@@ -403,12 +465,20 @@ async function postChapter(
 			? `📅 Upcoming Events — ${displayName}: ${events.length} event(s) this week.`
 			: `📅 Upcoming Events — ${displayName}: No upcoming events this week.`;
 
-	await slack.chat.postMessage({
-		channel: mapping.channelId,
-		text: fallbackText,
-		blocks,
-	});
-	console.log(`  → Posted to channel ${mapping.channelId}`);
+	try {
+		await slack.chat.postMessage({
+			channel: mapping.channelId,
+			text: fallbackText,
+			blocks,
+		});
+	} catch (err) {
+		if (isChannelAccessError(err)) {
+			console.warn(`  → Cannot post to channel ${displayName} (bot not in channel?), skipping`);
+			return;
+		}
+		throw err;
+	}
+	console.log(`  → Posted to channel ${displayName}`);
 }
 
 async function main(): Promise<void> {
