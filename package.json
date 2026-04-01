@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@slack/types": "^2.14.0",
-    "@slack/web-api": "^7.8.0",
+    "@slack/web-api": "^7.15.0",
     "dotenv": "~17.3.1"
   },
   "devDependencies": {
