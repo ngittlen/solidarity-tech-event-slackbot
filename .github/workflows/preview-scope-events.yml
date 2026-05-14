@@ -1,0 +1,23 @@
+name: Preview Scope Events
+on:
+  schedule:
+    - cron: '0 1 * * *'  # 9 PM ET (UTC-4 EDT) — adjust for DST as needed
+  workflow_dispatch:       # Allow manual runs from GitHub UI for testing
+
+jobs:
+  preview-events:
+    runs-on: ubuntu-latest
+    environment: Abdul4MI
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx tsx scripts/preview-scope-events.ts
+        env:
+          SOLIDARITY_TECH_API_KEY: ${{ secrets.SOLIDARITY_TECH_API_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          REVIEW_CHANNEL_ID: ${{ secrets.REVIEW_CHANNEL_ID }}
+          PREVIEW_SCOPE_ID: ${{ secrets.PREVIEW_SCOPE_ID }}

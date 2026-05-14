@@ -4,7 +4,9 @@
   "description": "A script for posting solidarity.tech events in slack",
   "type": "module",
   "scripts": {
-    "run:local": "npx tsx scripts/post-daily-events.ts"
+    "run:local": "npx tsx scripts/post-daily-events.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "author": "Nathaniel Gittlen",
   "license": "MIT",
@@ -28,6 +30,7 @@
   },
   "devDependencies": {
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.6"
   }
 }
