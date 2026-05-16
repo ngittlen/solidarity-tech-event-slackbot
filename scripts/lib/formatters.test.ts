@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
 	escapeLinkLabel,
 	escapeMrkdwn,
+	eventTypeLabel,
 	formatDateRange,
 } from "./formatters.js";
 
@@ -76,5 +77,33 @@ describe("escapeLinkLabel", () => {
 
 	it("handles a title combining all special chars", () => {
 		expect(escapeLinkLabel("A & B | <C>")).toBe("A &amp; B ｜ &lt;C&gt;");
+	});
+});
+
+describe("eventTypeLabel", () => {
+	it("returns the in-person label for both spellings", () => {
+		expect(eventTypeLabel("in_person")).toBe("🏢 In Person");
+		expect(eventTypeLabel("in-person")).toBe("🏢 In Person");
+	});
+
+	it("returns the virtual label for virtual and online", () => {
+		expect(eventTypeLabel("virtual")).toBe("💻 Virtual");
+		expect(eventTypeLabel("online")).toBe("💻 Virtual");
+	});
+
+	it("returns the hybrid label", () => {
+		expect(eventTypeLabel("hybrid")).toBe("🔀 Hybrid");
+	});
+
+	it("is case-insensitive on input", () => {
+		expect(eventTypeLabel("IN_PERSON")).toBe("🏢 In Person");
+		expect(eventTypeLabel("Virtual")).toBe("💻 Virtual");
+	});
+
+	it("returns an empty string for unknown, null, or undefined input", () => {
+		expect(eventTypeLabel("")).toBe("");
+		expect(eventTypeLabel("something-else")).toBe("");
+		expect(eventTypeLabel(null)).toBe("");
+		expect(eventTypeLabel(undefined)).toBe("");
 	});
 });

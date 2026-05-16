@@ -40,3 +40,18 @@ export function escapeMrkdwn(text: string): string {
 export function escapeLinkLabel(text: string): string {
 	return escapeMrkdwn(text).replace(/\|/g, "｜");
 }
+
+export function eventTypeLabel(eventType: string | null | undefined): string {
+	switch ((eventType ?? "").toLowerCase()) {
+		case "in_person":
+		case "in-person":
+			return "🏢 In Person";
+		case "virtual":
+		case "online":
+			return "💻 Virtual";
+		case "hybrid":
+			return "🔀 Hybrid";
+		default:
+			return "";
+	}
+}

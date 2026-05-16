@@ -13,6 +13,7 @@ import { filterEventsInWindow } from "./lib/filters.js";
 import {
 	SHORT_DATE,
 	escapeLinkLabel,
+	eventTypeLabel,
 	formatDateRange,
 } from "./lib/formatters.js";
 import {
@@ -132,21 +133,6 @@ function formatWeekRange(): string {
 	const monday = getMondayOfCurrentWeek();
 	const sunday = getSundayOfCurrentWeek();
 	return `${SHORT_DATE.format(monday)} – ${SHORT_DATE.format(sunday)}`;
-}
-
-function eventTypeLabel(eventType: string): string {
-	switch (eventType) {
-		case "in_person":
-		case "in-person":
-			return "🏢 In Person";
-		case "virtual":
-		case "online":
-			return "💻 Virtual";
-		case "hybrid":
-			return "🔀 Hybrid";
-		default:
-			return "";
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +325,8 @@ async function postChapter(
 			channel: mapping.channelId,
 			text: fallbackText,
 			blocks,
+			unfurl_links: false,
+			unfurl_media: false,
 		});
 	} catch (err) {
 		if (isChannelAccessError(err)) {
