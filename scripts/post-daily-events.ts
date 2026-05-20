@@ -22,6 +22,11 @@ import {
 	getSundayOfCurrentWeek,
 	isMonday,
 } from "./lib/week.js";
+import {
+	fetchPostedEventUrls,
+	getBotId,
+	isChannelAccessError,
+} from "./lib/slack.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -40,71 +45,6 @@ interface ChapterMapping {
 // ---------------------------------------------------------------------------
 // Fetch previously posted event URLs from Slack channel history
 // ---------------------------------------------------------------------------
-
-const CHANNEL_ACCESS_ERRORS = new Set([
-	"not_in_channel",
-	"channel_not_found",
-	"is_archived",
-	"missing_scope",
-]);
-
-function isChannelAccessError(err: unknown): boolean {
-	if (err && typeof err === "object" && "code" in err) {
-		// @slack/web-api wraps API errors with a `data.error` field
-		const data = (err as Record<string, unknown>)["data"];
-		if (data && typeof data === "object" && "error" in data) {
-			return CHANNEL_ACCESS_ERRORS.has(String((data as Record<string, unknown>)["error"]));
-		}
-	}
-	return false;
-}
-
-async function fetchPostedEventUrls(
-	slack: WebClient,
-	channelId: string,
-	botId: string,
-): Promise<Set<string>> {
-	const monday = getMondayOfCurrentWeek();
-	const oldest = String(monday.getTime() / 1000);
-
-	const allMessages: Record<string, unknown>[] = [];
-	let cursor: string | undefined;
-
-	do {
-		const result = await slack.conversations.history({
-			channel: channelId,
-			oldest,
-			limit: 200,
-			...(cursor ? { cursor } : {}),
-		});
-		allMessages.push(...((result.messages ?? []) as Record<string, unknown>[]));
-		cursor = (result.response_metadata as Record<string, string> | undefined)?.next_cursor;
-	} while (cursor);
-
-	const urls = new Set<string>();
-	// Matches Slack mrkdwn links: <url> or <url|label>
-	const urlPattern = /<(https?:\/\/[^|>\s]+)[|>]/g;
-
-	for (const msg of allMessages) {
-		// Only examine messages posted by this bot.
-		if (msg['bot_id'] !== botId) continue;
-
-		const blocks = msg['blocks'];
-		if (Array.isArray(blocks)) {
-			for (const block of blocks as Record<string, unknown>[]) {
-				if (block['type'] === 'section') {
-					const text = (block['text'] as Record<string, string> | undefined)?.['text'] ?? '';
-					for (const match of text.matchAll(urlPattern)) {
-						urls.add(match[1]);
-					}
-				}
-			}
-		}
-	}
-
-	console.log(`  → Found ${urls.size} previously posted event URL(s) in channel this week`);
-	return urls;
-}
 
 async function hasPostedToday(
 	slack: WebClient,
@@ -298,7 +238,12 @@ async function postChapter(
 		// Exclude events whose URLs already appeared in bot messages this week
 		let postedUrls: Set<string>;
 		try {
-			postedUrls = await fetchPostedEventUrls(slack, mapping.channelId, botId);
+			postedUrls = await fetchPostedEventUrls(
+				slack,
+				mapping.channelId,
+				botId,
+				getMondayOfCurrentWeek(),
+			);
 		} catch (err) {
 			if (isChannelAccessError(err)) {
 				console.warn(`  → Cannot read channel ${displayName} (bot not in channel?), skipping`);
@@ -306,6 +251,7 @@ async function postChapter(
 			}
 			throw err;
 		}
+		console.log(`  → Found ${postedUrls.size} previously posted event URL(s) in channel this week`);
 		events = events.filter((e) => !postedUrls.has(e.event_page_url!));
 		if (events.length === 0) {
 			console.log(`  → No new events to post for ${displayName}, skipping`);
@@ -371,13 +317,7 @@ async function main(): Promise<void> {
 	}
 
 	const slack = new WebClient(SLACK_BOT_TOKEN);
-
-	const auth = await slack.auth.test();
-	const botId = auth.bot_id;
-	if (!botId) {
-		console.error("Could not resolve bot_id from auth.test (is SLACK_BOT_TOKEN a bot token?)");
-		process.exit(1);
-	}
+	const botId = await getBotId(slack);
 
 	let anyFailed = false;
 

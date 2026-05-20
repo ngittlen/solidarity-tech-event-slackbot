@@ -14,7 +14,12 @@ import {
 	eventTypeLabel,
 	formatDateRange,
 } from "./lib/formatters.js";
-import { computeDigestWindow, nextDigestFire } from "./lib/week.js";
+import {
+	computeDigestWindow,
+	getMostRecentSundayStart,
+	nextDigestFire,
+} from "./lib/week.js";
+import { fetchPostedEventUrls, getBotId } from "./lib/slack.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -80,7 +85,7 @@ async function main(): Promise<void> {
 	const runAt = nextDigestFire();
 	const { nowMs, cutoffMs, isWeekly } = computeDigestWindow(runAt);
 
-	const events = filterEventsInWindow(allEvents, {
+	let events = filterEventsInWindow(allEvents, {
 		cutoffMs,
 		now: nowMs,
 		excludePhrases: EXCLUDE_PHRASES,
@@ -90,8 +95,32 @@ async function main(): Promise<void> {
 		`${allEvents.length} total events fetched, ${events.length} in tomorrow's ${isWeekly ? "weekly" : "mid-week"} digest window`,
 	);
 
-	const text = buildMessage(events, runAt, isWeekly);
 	const slack = new WebClient(SLACK_BOT_TOKEN);
+	const botId = await getBotId(slack);
+
+	// Mirror the daily digest's cadence: the Sunday-night preview (i.e. the
+	// preview for tomorrow's Monday weekly digest) is the full reset list.
+	// Mid-week previews dedup against URLs already posted this preview cycle.
+	if (!isWeekly) {
+		const since = getMostRecentSundayStart();
+		const postedUrls = await fetchPostedEventUrls(
+			slack,
+			REVIEW_CHANNEL_ID,
+			botId,
+			since,
+		);
+		console.log(
+			`Found ${postedUrls.size} previously posted event URL(s) in review channel since ${since.toISOString()}`,
+		);
+		events = events.filter((e) => !postedUrls.has(e.event_page_url!));
+		if (events.length === 0) {
+			console.log("No new events to preview, skipping");
+			return;
+		}
+		console.log(`${events.length} new event(s) not yet previewed`);
+	}
+
+	const text = buildMessage(events, runAt, isWeekly);
 
 	await slack.chat.postMessage({
 		channel: REVIEW_CHANNEL_ID,

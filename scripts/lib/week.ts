@@ -23,6 +23,17 @@ export function getSundayOfCurrentWeek(now: Date = new Date()): Date {
 	return sunday;
 }
 
+// Start of the most recent Sunday (00:00 local). Used as the preview-cycle
+// anchor: each Sunday-night preview posts the full list, then mid-week
+// previews dedup against URLs posted since the cycle started.
+export function getMostRecentSundayStart(now: Date = new Date()): Date {
+	const day = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+	const sunday = new Date(now);
+	sunday.setDate(now.getDate() - day);
+	sunday.setHours(0, 0, 0, 0);
+	return sunday;
+}
+
 // The digest workflow's cron is `0 14 * * *` — fires at 14:00 UTC daily.
 // Returns the next 14:00 UTC strictly after `now`.
 export function nextDigestFire(now: Date = new Date()): Date {
