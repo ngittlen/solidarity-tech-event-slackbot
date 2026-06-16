@@ -41,6 +41,26 @@ export function escapeLinkLabel(text: string): string {
 	return escapeMrkdwn(text).replace(/\|/g, "｜");
 }
 
+// The solidarity.tech API only ever sets the event-level event_type to a single
+// value ("in_person" or "virtual") — it never sends "hybrid". Hybrid-ness lives
+// on the sessions: an event is hybrid when its sessions mix in-person and
+// virtual. Derive the effective type from the sessions, falling back to the
+// event-level value when sessions don't disagree.
+export function deriveEventType(event: {
+	event_type?: string | null;
+	event_sessions: { event_type?: string | null }[];
+}): string {
+	const sessionTypes = new Set(
+		(event.event_sessions ?? [])
+			.map((s) => (s.event_type ?? "").toLowerCase())
+			.filter(Boolean),
+	);
+	const hasInPerson = sessionTypes.has("in_person") || sessionTypes.has("in-person");
+	const hasVirtual = sessionTypes.has("virtual") || sessionTypes.has("online");
+	if (hasInPerson && hasVirtual) return "hybrid";
+	return (event.event_type ?? "").toLowerCase();
+}
+
 export function eventTypeLabel(eventType: string | null | undefined): string {
 	switch ((eventType ?? "").toLowerCase()) {
 		case "in_person":

@@ -15,6 +15,7 @@ function makeSession(overrides: Partial<EventSession> = {}): EventSession {
 		title: "Session",
 		location_name: null,
 		location_address: "",
+		event_type: "in_person",
 		...overrides,
 	};
 }

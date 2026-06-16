@@ -10,6 +10,7 @@ import { filterEventsInWindow } from "./lib/filters.js";
 import {
 	SHORT_DATE,
 	SHORT_WEEKDAY,
+	deriveEventType,
 	escapeLinkLabel,
 	eventTypeLabel,
 	formatDateRange,
@@ -45,7 +46,7 @@ function buildMessage(events: SolidarityEvent[], runAt: Date, isWeekly: boolean)
 		const sessions = e.event_sessions
 			.map((s) => formatDateRange(new Date(s.start_time), new Date(s.end_time)))
 			.join(", ");
-		const typeLabel = eventTypeLabel(e.event_type);
+		const typeLabel = eventTypeLabel(deriveEventType(e));
 		const titleLine = `• <${e.event_page_url}|${escapeLinkLabel(e.title)}>${typeLabel ? `   ${typeLabel}` : ""}`;
 		return `${titleLine}\n  ${sessions}`;
 	});

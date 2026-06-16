@@ -12,6 +12,7 @@ import { EXCLUDE_LOCATIONS, EXCLUDE_PHRASES } from "./lib/exclusions.js";
 import { filterEventsInWindow } from "./lib/filters.js";
 import {
 	SHORT_DATE,
+	deriveEventType,
 	escapeLinkLabel,
 	eventTypeLabel,
 	formatDateRange,
@@ -140,7 +141,7 @@ function buildBlocks(
 	for (const event of visibleEvents) {
 		const titleText = `*<${event.event_page_url!}|${escapeLinkLabel(event.title)}>*`;
 
-		const normalizedType = event.event_type?.toLowerCase() ?? "";
+		const normalizedType = deriveEventType(event);
 		const typeLabel = eventTypeLabel(normalizedType);
 		const isVirtual = normalizedType === "virtual" || normalizedType === "online";
 

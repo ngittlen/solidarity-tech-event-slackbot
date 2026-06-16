@@ -7,6 +7,10 @@ export interface EventSession {
 	title: string;
 	location_name: string | null;
 	location_address: string;
+	// Per-session type. The event-level event_type is always a single value
+	// ("in_person" or "virtual"); a "hybrid" event is one whose sessions mix
+	// in-person and virtual. See deriveEventType in formatters.ts.
+	event_type: string;
 }
 
 export interface SolidarityEvent {

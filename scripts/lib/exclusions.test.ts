@@ -16,6 +16,7 @@ function makeSession(
 		title: "Session",
 		location_name: null,
 		location_address: "",
+		event_type: "in_person",
 		...overrides,
 	};
 }

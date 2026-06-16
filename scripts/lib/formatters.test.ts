@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
+	deriveEventType,
 	escapeLinkLabel,
 	escapeMrkdwn,
 	eventTypeLabel,
 	formatDateRange,
 } from "./formatters.js";
+
+function session(event_type: string) {
+	return { event_type };
+}
 
 // Intl.DateTimeFormat uses U+202F (narrow no-break space) between the time
 // and meridiem on Node 18+. Normalize all whitespace runs to a single space
@@ -105,5 +110,61 @@ describe("eventTypeLabel", () => {
 		expect(eventTypeLabel("something-else")).toBe("");
 		expect(eventTypeLabel(null)).toBe("");
 		expect(eventTypeLabel(undefined)).toBe("");
+	});
+});
+
+describe("deriveEventType", () => {
+	it("returns hybrid when sessions mix in-person and virtual", () => {
+		const event = {
+			event_type: "in_person",
+			event_sessions: [session("in_person"), session("virtual")],
+		};
+		expect(deriveEventType(event)).toBe("hybrid");
+		// And that flows through to the hybrid label.
+		expect(eventTypeLabel(deriveEventType(event))).toBe("🔀 Hybrid");
+	});
+
+	it("treats online as virtual when detecting a mix", () => {
+		const event = {
+			event_type: "in_person",
+			event_sessions: [session("in-person"), session("online")],
+		};
+		expect(deriveEventType(event)).toBe("hybrid");
+	});
+
+	it("falls back to the event-level type when sessions agree", () => {
+		expect(
+			deriveEventType({
+				event_type: "in_person",
+				event_sessions: [session("in_person"), session("in_person")],
+			}),
+		).toBe("in_person");
+		expect(
+			deriveEventType({
+				event_type: "virtual",
+				event_sessions: [session("virtual")],
+			}),
+		).toBe("virtual");
+	});
+
+	it("falls back to the event-level type when sessions lack a type", () => {
+		expect(
+			deriveEventType({
+				event_type: "Virtual",
+				event_sessions: [session(""), {}],
+			}),
+		).toBe("virtual");
+	});
+
+	it("handles a missing or empty sessions array", () => {
+		expect(deriveEventType({ event_type: "in_person", event_sessions: [] })).toBe(
+			"in_person",
+		);
+		expect(
+			deriveEventType({
+				event_type: "in_person",
+				event_sessions: undefined as unknown as { event_type?: string }[],
+			}),
+		).toBe("in_person");
 	});
 });
