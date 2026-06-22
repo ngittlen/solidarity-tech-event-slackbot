@@ -230,6 +230,36 @@ describe("filterEventsInWindow", () => {
 		expect(result.map((e) => e.id)).toEqual([1]);
 	});
 
+	it("sets derivedEventType to hybrid from the full session list even when only one type survives the window", () => {
+		const event = makeEvent({
+			id: 1,
+			event_type: "in_person",
+			event_sessions: [
+				// In window, in-person.
+				makeSession({
+					id: 10,
+					event_type: "in_person",
+					start_time: new Date(NOW + ONE_DAY).toISOString(),
+					end_time: new Date(NOW + ONE_DAY + 3600_000).toISOString(),
+				}),
+				// Beyond the cutoff, virtual — gets pruned, but still makes the
+				// event hybrid.
+				makeSession({
+					id: 11,
+					event_type: "virtual",
+					start_time: new Date(cutoffMs + ONE_DAY).toISOString(),
+					end_time: new Date(cutoffMs + ONE_DAY + 3600_000).toISOString(),
+				}),
+			],
+		});
+		const result = filterEventsInWindow([event], opts);
+		expect(result).toHaveLength(1);
+		// Only the in-person session survives the window...
+		expect(result[0].event_sessions.map((s) => s.id)).toEqual([10]);
+		// ...but the event is still recognized as hybrid.
+		expect(result[0].derivedEventType).toBe("hybrid");
+	});
+
 	it("uses Date.now() when opts.now is omitted", () => {
 		const event = makeEvent({
 			id: 1,

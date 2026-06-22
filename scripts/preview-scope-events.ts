@@ -46,7 +46,7 @@ function buildMessage(events: SolidarityEvent[], runAt: Date, isWeekly: boolean)
 		const sessions = e.event_sessions
 			.map((s) => formatDateRange(new Date(s.start_time), new Date(s.end_time)))
 			.join(", ");
-		const typeLabel = eventTypeLabel(deriveEventType(e));
+		const typeLabel = eventTypeLabel(e.derivedEventType ?? deriveEventType(e));
 		const titleLine = `• <${e.event_page_url}|${escapeLinkLabel(e.title)}>${typeLabel ? `   ${typeLabel}` : ""}`;
 		return `${titleLine}\n  ${sessions}`;
 	});

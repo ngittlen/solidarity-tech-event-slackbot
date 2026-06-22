@@ -1,5 +1,6 @@
 import type { SolidarityEvent } from "./types.js";
 import { matchesAnyLocation, matchesAnyPhrase } from "./exclusions.js";
+import { deriveEventType } from "./formatters.js";
 
 export interface FilterEventsOptions {
 	cutoffMs: number;
@@ -31,6 +32,10 @@ export function filterEventsInWindow(
 		)
 		.map((event) => ({
 			...event,
+			// Derive from the full session list before pruning below, so an event
+			// whose in-person and virtual sessions don't all fall in the window is
+			// still recognized as hybrid.
+			derivedEventType: deriveEventType(event),
 			event_sessions: (event.event_sessions ?? [])
 				.filter((s) => {
 					const t = new Date(s.start_time).getTime();

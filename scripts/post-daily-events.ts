@@ -141,7 +141,7 @@ function buildBlocks(
 	for (const event of visibleEvents) {
 		const titleText = `*<${event.event_page_url!}|${escapeLinkLabel(event.title)}>*`;
 
-		const normalizedType = deriveEventType(event);
+		const normalizedType = event.derivedEventType ?? deriveEventType(event);
 		const typeLabel = eventTypeLabel(normalizedType);
 		const isVirtual = normalizedType === "virtual" || normalizedType === "online";
 

@@ -20,6 +20,11 @@ export interface SolidarityEvent {
 	event_sessions: EventSession[];
 	event_page_url: string | null;
 	tags: string[];
+	// Effective type ("in_person" | "virtual" | "hybrid") derived from the full
+	// session list. Set by filterEventsInWindow before it prunes sessions to the
+	// digest window, so hybrid-ness reflects the whole event rather than only the
+	// sessions that happen to fall in the window. See deriveEventType.
+	derivedEventType?: string;
 }
 
 export interface SolidarityEventsMeta {
