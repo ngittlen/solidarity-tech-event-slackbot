@@ -32,8 +32,80 @@ export async function getBotId(slack: WebClient): Promise<string> {
 	return botId;
 }
 
+// Prefix of the nightly preview post's first line. Shared with
+// preview-scope-events.ts so the digest can locate the preview message whose
+// thread holds reviewer-authored intros. Both must stay in sync.
+export const PREVIEW_HEADER_PREFIX = "*Preview: Scope";
+
 // Matches Slack mrkdwn links: <url> or <url|label>
 const URL_PATTERN = /<(https?:\/\/[^|>\s]+)[|>]/g;
+
+// Matches a Slack channel mention: <#C0123456> or <#C0123456|channel-name>.
+// Slack rewrites a typed `#channel-name` into this form on send.
+const CHANNEL_MENTION_PATTERN = /<#(C[A-Z0-9]+)(?:\|[^>]*)?>/g;
+
+// Parses reviewer thread replies into a channelId → intro-text map. A reply
+// contributes an intro to every channel it mentions; the mention tokens are
+// stripped and the remaining text (trimmed) becomes the intro. Replies with no
+// channel mention, or no text once mentions are removed, are ignored. When the
+// same channel is mentioned by multiple replies, the last reply wins so
+// reviewers can correct themselves by replying again.
+export function parseChannelIntros(replyTexts: string[]): Map<string, string> {
+	const intros = new Map<string, string>();
+	for (const raw of replyTexts) {
+		if (typeof raw !== "string") continue;
+		const channelIds = [...raw.matchAll(CHANNEL_MENTION_PATTERN)].map((m) => m[1]);
+		if (channelIds.length === 0) continue;
+		const introText = raw.replace(CHANNEL_MENTION_PATTERN, "").trim();
+		if (!introText) continue;
+		for (const id of channelIds) intros.set(id, introText);
+	}
+	return intros;
+}
+
+// Reads the review channel, locates the most recent preview post from `botId`
+// since `since`, and returns the reviewer-authored intros from its thread,
+// keyed by target channel ID. Human replies only — the bot's own messages in
+// the thread are ignored. Returns an empty map when no preview post is found.
+export async function fetchChannelIntros(
+	slack: WebClient,
+	reviewChannelId: string,
+	botId: string,
+	since: Date,
+): Promise<Map<string, string>> {
+	const oldest = String(since.getTime() / 1000);
+
+	const result = await slack.conversations.history({
+		channel: reviewChannelId,
+		oldest,
+		limit: 200,
+	});
+	const messages = (result.messages ?? []) as Record<string, unknown>[];
+
+	// history returns newest-first, so the first match is the latest preview.
+	const previewRoot = messages.find(
+		(m) =>
+			m["bot_id"] === botId &&
+			typeof m["text"] === "string" &&
+			(m["text"] as string).startsWith(PREVIEW_HEADER_PREFIX),
+	);
+	if (!previewRoot) return new Map();
+
+	const ts = previewRoot["ts"] as string;
+	const replies = await slack.conversations.replies({
+		channel: reviewChannelId,
+		ts,
+		limit: 200,
+	});
+	const replyMessages = (replies.messages ?? []) as Record<string, unknown>[];
+
+	const texts = replyMessages
+		.filter((m) => m["ts"] !== ts && m["bot_id"] !== botId)
+		.map((m) => m["text"])
+		.filter((t): t is string => typeof t === "string");
+
+	return parseChannelIntros(texts);
+}
 
 // Reads channel history since `since` and returns the set of URLs that have
 // already appeared in messages from `botId`. Scans both the plain mrkdwn body

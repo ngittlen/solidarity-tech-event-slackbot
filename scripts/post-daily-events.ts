@@ -20,10 +20,12 @@ import {
 import {
 	computeDigestWindow,
 	getMondayOfCurrentWeek,
+	getMostRecentSundayStart,
 	getSundayOfCurrentWeek,
 	isMonday,
 } from "./lib/week.js";
 import {
+	fetchChannelIntros,
 	fetchPostedEventUrls,
 	getBotId,
 	isChannelAccessError,
@@ -35,6 +37,9 @@ import {
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? "";
 const CHAPTER_CHANNEL_MAPPING_RAW = process.env.CHAPTER_CHANNEL_MAPPING ?? "";
+// Optional: the review channel whose preview thread holds reviewer-authored
+// intros. When unset, the digest posts without intros (feature off).
+const REVIEW_CHANNEL_ID = process.env.REVIEW_CHANNEL_ID ?? "";
 
 interface ChapterMapping {
 	chapterId: number;
@@ -90,6 +95,7 @@ function buildBlocks(
 	chapterUrl: string,
 	events: SolidarityEvent[],
 	isWeeklyDigest: boolean,
+	introText?: string,
 ): (KnownBlock | SlackBlock)[] {
 	const weekRange = formatWeekRange();
 
@@ -120,10 +126,22 @@ function buildBlocks(
 		],
 	};
 
+	// Reviewer-authored intro paragraph, prepended above the events. Left as
+	// mrkdwn (not escaped) so reviewers can format it.
+	const introBlocks: (KnownBlock | SlackBlock)[] = introText
+		? [
+				{
+					type: "section",
+					text: { type: "mrkdwn", text: introText },
+				} as unknown as KnownBlock,
+			]
+		: [];
+
 	if (events.length === 0) {
 		return [
 			headerBlock,
 			subtitleBlock,
+			...introBlocks,
 			{
 				type: "section",
 				text: {
@@ -134,8 +152,10 @@ function buildBlocks(
 		];
 	}
 
-	const overflow = events.length > MAX_GROUPS ? events.length - MAX_GROUPS : 0;
-	const visibleEvents = overflow > 0 ? events.slice(0, MAX_GROUPS) : events;
+	// The intro consumes one block, so it lowers how many events we can show.
+	const maxGroups = MAX_GROUPS - introBlocks.length;
+	const overflow = events.length > maxGroups ? events.length - maxGroups : 0;
+	const visibleEvents = overflow > 0 ? events.slice(0, maxGroups) : events;
 
 	const eventBlocks: (KnownBlock | SlackBlock)[] = [];
 	for (const event of visibleEvents) {
@@ -186,7 +206,7 @@ function buildBlocks(
 		});
 	}
 
-	return [headerBlock, subtitleBlock, ...eventBlocks];
+	return [headerBlock, subtitleBlock, ...introBlocks, ...eventBlocks];
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +218,7 @@ async function postChapter(
 	mapping: ChapterMapping,
 	isWeeklyDigest: boolean,
 	botId: string,
+	introText?: string,
 ): Promise<void> {
 	const displayName = mapping.name;
 	const pageUrl = mapping.pageUrl;
@@ -261,7 +282,10 @@ async function postChapter(
 		console.log(`  → ${events.length} new event(s) not yet posted`);
 	}
 
-	const blocks = buildBlocks(displayName, pageUrl, events, isWeeklyDigest);
+	const blocks = buildBlocks(displayName, pageUrl, events, isWeeklyDigest, introText);
+	if (introText) {
+		console.log(`  → Including reviewer intro for ${displayName}`);
+	}
 	const fallbackText =
 		events.length > 0
 			? `📅 Upcoming Events — ${displayName}: ${events.length} event(s) this week.`
@@ -320,11 +344,38 @@ async function main(): Promise<void> {
 	const slack = new WebClient(SLACK_BOT_TOKEN);
 	const botId = await getBotId(slack);
 
+	// Intros ride along with the Monday weekly digest only. Pull them from the
+	// review channel's latest preview thread; failures here degrade to posting
+	// without intros rather than failing the digest.
+	let intros = new Map<string, string>();
+	if (weeklyDigest && REVIEW_CHANNEL_ID) {
+		try {
+			intros = await fetchChannelIntros(
+				slack,
+				REVIEW_CHANNEL_ID,
+				botId,
+				getMostRecentSundayStart(),
+			);
+			console.log(`Loaded ${intros.size} chapter intro(s) from review channel`);
+		} catch (err) {
+			console.warn(
+				"Could not load intros from review channel, posting without them:",
+				err instanceof Error ? err.message : err,
+			);
+		}
+	}
+
 	let anyFailed = false;
 
 	for (const mapping of mappings) {
 		try {
-			await postChapter(slack, mapping, weeklyDigest, botId);
+			await postChapter(
+				slack,
+				mapping,
+				weeklyDigest,
+				botId,
+				intros.get(mapping.channelId),
+			);
 		} catch (err) {
 			console.error(`Failed to post events for chapter ${mapping.name}:`, err);
 			anyFailed = true;

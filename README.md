@@ -10,6 +10,8 @@ Every night at 9 PM ET, the workflow runs `scripts/preview-scope-events.ts`. It 
 
 This gives reviewers a chance to move misclassified events to the correct chapter or add the `slack-exclude` tag before the digest runs.
 
+The Sunday-night preview also invites reviewers to add a per-chapter intro paragraph to Monday's weekly digest (see [Chapter intros](#chapter-intros-monday-only) below).
+
 ### Daily digest (9 AM ET)
 
 Every day at 9 AM ET, the workflow runs `scripts/post-daily-events.ts`. The behavior depends on the day of the week:
@@ -17,6 +19,16 @@ Every day at 9 AM ET, the workflow runs `scripts/post-daily-events.ts`. The beha
 ### Monday — weekly digest
 
 On Mondays the script posts a full digest of all events for the coming 7 days to each configured channel.
+
+#### Chapter intros (Monday only)
+
+Reviewers can prepend a short intro paragraph to any chapter's Monday digest. In the review channel's Sunday-night preview thread, they **reply starting with the target chapter's channel** — typing `#` lets Slack autocomplete it — followed by the intro text:
+
+```
+#chapter-events Big week ahead — three actions and a new-member social. Come say hi!
+```
+
+When the digest runs Monday morning (with `REVIEW_CHANNEL_ID` set), it finds that preview thread, matches each reply to a chapter by **channel ID** (so typos in the channel name can't misroute an intro), and renders the text as a section block above that chapter's events. One reply per chapter; replying again to the same channel revises it. A reply that mentions multiple channels applies the same intro to each. Replies that don't match any configured chapter, or that fail to parse, are simply ignored — the digest still posts normally. The feature is off when `REVIEW_CHANNEL_ID` is unset.
 
 ### Tuesday–Sunday — new events only
 

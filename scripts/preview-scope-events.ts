@@ -20,7 +20,11 @@ import {
 	getMostRecentSundayStart,
 	nextDigestFire,
 } from "./lib/week.js";
-import { fetchPostedEventUrls, getBotId } from "./lib/slack.js";
+import {
+	PREVIEW_HEADER_PREFIX,
+	fetchPostedEventUrls,
+	getBotId,
+} from "./lib/slack.js";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -34,12 +38,26 @@ const SCOPE_ID = Number(process.env.PREVIEW_SCOPE_ID ?? "");
 // Formatting
 // ---------------------------------------------------------------------------
 
+// Only shown on the Sunday-night weekly preview: intros ride along with
+// Monday's weekly digest only. Reviewers reply in this thread; typing `#` lets
+// Slack autocomplete the target chapter's channel, which the digest matches by
+// channel ID.
+const INTRO_PROMPT =
+	"💬 *Add an intro to Monday's digest:* reply in this thread starting with a chapter's channel " +
+	"(type `#` and pick it), then your intro text — e.g. `#chapter-events Big week ahead, come say hi!` " +
+	"One reply per chapter; reply again to a channel to revise it.";
+
 function buildMessage(events: SolidarityEvent[], runAt: Date, isWeekly: boolean): string {
 	const tomorrowStr = `${SHORT_WEEKDAY.format(runAt)}, ${SHORT_DATE.format(runAt)}`;
 	const digestKind = isWeekly ? "weekly digest" : "new-events alert";
+	const introPrompt = isWeekly ? [``, INTRO_PROMPT] : [];
 
 	if (events.length === 0) {
-		return `*Preview: Scope ${SCOPE_ID} Events*\nNo events in tomorrow's ${digestKind} window for scope ${SCOPE_ID}.`;
+		return [
+			`${PREVIEW_HEADER_PREFIX} ${SCOPE_ID} Events*`,
+			`No events in tomorrow's ${digestKind} window for scope ${SCOPE_ID}.`,
+			...introPrompt,
+		].join("\n");
 	}
 
 	const lines = events.map((e) => {
@@ -52,10 +70,11 @@ function buildMessage(events: SolidarityEvent[], runAt: Date, isWeekly: boolean)
 	});
 
 	return [
-		`*Preview: Scope ${SCOPE_ID} Events* — ${events.length} event(s) going out in tomorrow's ${digestKind} (${tomorrowStr})`,
+		`${PREVIEW_HEADER_PREFIX} ${SCOPE_ID} Events* — ${events.length} event(s) going out in tomorrow's ${digestKind} (${tomorrowStr})`,
 		`Review before 9 AM ET if any should be moved to the correct chapter or excluded (add the \`slack-exclude\` tag).`,
 		``,
 		...lines,
+		...introPrompt,
 	].join("\n");
 }
 

@@ -8,9 +8,11 @@ import {
 } from "vitest";
 import type { WebClient } from "@slack/web-api";
 import {
+	fetchChannelIntros,
 	fetchPostedEventUrls,
 	getBotId,
 	isChannelAccessError,
+	parseChannelIntros,
 } from "./slack.js";
 
 describe("isChannelAccessError", () => {
@@ -218,5 +220,125 @@ describe("fetchPostedEventUrls", () => {
 		]);
 		const result = await fetchPostedEventUrls(slack, "C1", BOT_ID, SINCE);
 		expect(result).toEqual(new Set(["https://example.com/e/1"]));
+	});
+});
+
+describe("parseChannelIntros", () => {
+	it("maps a channel mention to the remaining trimmed text", () => {
+		const result = parseChannelIntros([
+			"<#C0123456|chapter-events> Big week ahead, come say hi!",
+		]);
+		expect(result).toEqual(
+			new Map([["C0123456", "Big week ahead, come say hi!"]]),
+		);
+	});
+
+	it("handles a bare mention with no channel name", () => {
+		const result = parseChannelIntros(["<#C0123456> Welcome"]);
+		expect(result).toEqual(new Map([["C0123456", "Welcome"]]));
+	});
+
+	it("applies one reply to every channel it mentions", () => {
+		const result = parseChannelIntros([
+			"<#C0000001|a> <#C0000002|b> Shared announcement",
+		]);
+		expect(result).toEqual(
+			new Map([
+				["C0000001", "Shared announcement"],
+				["C0000002", "Shared announcement"],
+			]),
+		);
+	});
+
+	it("ignores replies with no channel mention", () => {
+		expect(parseChannelIntros(["just a comment, no channel"])).toEqual(
+			new Map(),
+		);
+	});
+
+	it("ignores replies that are only a mention with no intro text", () => {
+		expect(parseChannelIntros(["<#C0123456|chapter-events>   "])).toEqual(
+			new Map(),
+		);
+	});
+
+	it("lets a later reply override an earlier one for the same channel", () => {
+		const result = parseChannelIntros([
+			"<#C0123456|c> first draft",
+			"<#C0123456|c> revised intro",
+		]);
+		expect(result).toEqual(new Map([["C0123456", "revised intro"]]));
+	});
+
+	it("keeps a mention that appears mid-text as the intro's channel", () => {
+		const result = parseChannelIntros(["Reminder for <#C0123456|c> tonight"]);
+		expect(result).toEqual(new Map([["C0123456", "Reminder for  tonight"]]));
+	});
+});
+
+describe("fetchChannelIntros", () => {
+	const BOT_ID = "B12345";
+	const SINCE = new Date("2026-01-18T00:00:00Z");
+
+	function mockSlack(
+		historyMessages: Array<Record<string, unknown>>,
+		replyMessages: Array<Record<string, unknown>>,
+	) {
+		const history = vi.fn().mockResolvedValue({ messages: historyMessages });
+		const replies = vi.fn().mockResolvedValue({ messages: replyMessages });
+		const slack = {
+			conversations: { history, replies },
+		} as unknown as WebClient;
+		return { slack, history, replies };
+	}
+
+	it("returns intros from the latest preview thread, keyed by channel", async () => {
+		const { slack, replies } = mockSlack(
+			[{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events* — 3 event(s)" }],
+			[
+				{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events* — 3 event(s)" },
+				{ user: "U1", ts: "101.0", text: "<#C0000001|a> Welcome to the chapter" },
+			],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result).toEqual(new Map([["C0000001", "Welcome to the chapter"]]));
+		expect(replies).toHaveBeenCalledWith(
+			expect.objectContaining({ channel: "REVIEW", ts: "100.0" }),
+		);
+	});
+
+	it("returns an empty map when no preview post is present", async () => {
+		const { slack, replies } = mockSlack(
+			[{ user: "U1", ts: "50.0", text: "unrelated chatter" }],
+			[],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result).toEqual(new Map());
+		expect(replies).not.toHaveBeenCalled();
+	});
+
+	it("ignores the root message and the bot's own thread replies", async () => {
+		const { slack } = mockSlack(
+			[{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" }],
+			[
+				{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" },
+				{ bot_id: BOT_ID, ts: "102.0", text: "<#C0000009|bot> should be ignored" },
+				{ user: "U1", ts: "103.0", text: "<#C0000001|a> real intro" },
+			],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result).toEqual(new Map([["C0000001", "real intro"]]));
+	});
+
+	it("passes `oldest` as the since timestamp in seconds", async () => {
+		const { slack, history } = mockSlack([], []);
+		await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(history).toHaveBeenCalledWith(
+			expect.objectContaining({
+				channel: "REVIEW",
+				oldest: String(SINCE.getTime() / 1000),
+				limit: 200,
+			}),
+		);
 	});
 });
