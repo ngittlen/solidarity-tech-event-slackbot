@@ -1,7 +1,5 @@
 import "./lib/env.js";
 import { WebClient } from "@slack/web-api";
-import type { Block as SlackBlock, KnownBlock } from "@slack/types";
-import type { SolidarityEvent } from "./lib/types.js";
 import {
 	API_DELAY_MS,
 	assertSolidarityApiKey,
@@ -10,20 +8,16 @@ import {
 } from "./lib/solidarity-api.js";
 import { EXCLUDE_LOCATIONS, EXCLUDE_PHRASES } from "./lib/exclusions.js";
 import { filterEventsInWindow } from "./lib/filters.js";
-import {
-	SHORT_DATE,
-	deriveEventType,
-	escapeLinkLabel,
-	eventTypeLabel,
-	formatDateRange,
-} from "./lib/formatters.js";
+import { MAX_INTRO_LENGTH, buildBlocks } from "./lib/digest.js";
 import {
 	computeDigestWindow,
 	getMondayOfCurrentWeek,
-	getSundayOfCurrentWeek,
+	getMostRecentSundayStart,
 	isMonday,
 } from "./lib/week.js";
 import {
+	INTROS_CLOSED_PREFIX,
+	fetchChannelIntros,
 	fetchPostedEventUrls,
 	getBotId,
 	isChannelAccessError,
@@ -35,6 +29,9 @@ import {
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? "";
 const CHAPTER_CHANNEL_MAPPING_RAW = process.env.CHAPTER_CHANNEL_MAPPING ?? "";
+// Optional: the review channel whose preview thread holds reviewer-authored
+// intros. When unset, the digest posts without intros (feature off).
+const REVIEW_CHANNEL_ID = process.env.REVIEW_CHANNEL_ID ?? "";
 
 interface ChapterMapping {
 	chapterId: number;
@@ -67,129 +64,6 @@ async function hasPostedToday(
 }
 
 // ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
-
-function formatWeekRange(): string {
-	const monday = getMondayOfCurrentWeek();
-	const sunday = getSundayOfCurrentWeek();
-	return `${SHORT_DATE.format(monday)} – ${SHORT_DATE.format(sunday)}`;
-}
-
-// ---------------------------------------------------------------------------
-// Block Kit builder
-// ---------------------------------------------------------------------------
-
-// header + subtitle = 2 blocks; each grouped event = 1 section + 1 divider = 2 blocks,
-// minus 1 for the removed trailing divider, minus 1 for a possible overflow notice
-// → max 23 events before needing to reserve a block for the overflow notice.
-const MAX_GROUPS = 23;
-
-function buildBlocks(
-	chapterName: string,
-	chapterUrl: string,
-	events: SolidarityEvent[],
-	isWeeklyDigest: boolean,
-): (KnownBlock | SlackBlock)[] {
-	const weekRange = formatWeekRange();
-
-	const headerText = isWeeklyDigest
-		? `📅 Upcoming Events — ${chapterName}`
-		: `🆕 New Events This Week — ${chapterName}`;
-
-	const subtitleText = isWeeklyDigest
-		? `This week · ${weekRange} · <${chapterUrl}|All Events>`
-		: `New this week · ${weekRange} · <${chapterUrl}|All Events>`;
-
-	const headerBlock = {
-		type: "header",
-		text: {
-			type: "plain_text",
-			text: headerText,
-			emoji: true,
-		},
-	};
-
-	const subtitleBlock = {
-		type: "context",
-		elements: [
-			{
-				type: "mrkdwn",
-				text: subtitleText,
-			},
-		],
-	};
-
-	if (events.length === 0) {
-		return [
-			headerBlock,
-			subtitleBlock,
-			{
-				type: "section",
-				text: {
-					type: "mrkdwn",
-					text: `No upcoming events this week.`,
-				},
-			},
-		];
-	}
-
-	const overflow = events.length > MAX_GROUPS ? events.length - MAX_GROUPS : 0;
-	const visibleEvents = overflow > 0 ? events.slice(0, MAX_GROUPS) : events;
-
-	const eventBlocks: (KnownBlock | SlackBlock)[] = [];
-	for (const event of visibleEvents) {
-		const titleText = `*<${event.event_page_url!}|${escapeLinkLabel(event.title)}>*`;
-
-		const normalizedType = event.derivedEventType ?? deriveEventType(event);
-		const typeLabel = eventTypeLabel(normalizedType);
-		const isVirtual = normalizedType === "virtual" || normalizedType === "online";
-
-		const sessionLines = event.event_sessions.map((session) => {
-			const startDate = new Date(session.start_time);
-			const endDate = new Date(session.end_time);
-			const timeStr = formatDateRange(startDate, endDate);
-			const location = session.location_address || session.location_name || undefined;
-
-			let line = `📅 *${timeStr}*`;
-			if (location && !isVirtual) line += `   📍 _${location}_`;
-			if (typeLabel) line += `   ${typeLabel}`;
-			return line;
-		});
-
-		const sectionBlock: Record<string, unknown> = {
-			type: "section",
-			text: {
-				type: "mrkdwn",
-				text: `${titleText}\n${sessionLines.join("\n")}`,
-			},
-		};
-
-		eventBlocks.push(sectionBlock as unknown as KnownBlock);
-		eventBlocks.push({ type: "divider" });
-	}
-
-	// Remove trailing divider
-	if (eventBlocks.length > 0 && (eventBlocks[eventBlocks.length - 1] as KnownBlock).type === "divider") {
-		eventBlocks.pop();
-	}
-
-	if (overflow > 0) {
-		eventBlocks.push({
-			type: "context",
-			elements: [
-				{
-					type: "mrkdwn",
-					text: `_+${overflow} more event${overflow === 1 ? "" : "s"} this week not shown._`,
-				},
-			],
-		});
-	}
-
-	return [headerBlock, subtitleBlock, ...eventBlocks];
-}
-
-// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -198,6 +72,7 @@ async function postChapter(
 	mapping: ChapterMapping,
 	isWeeklyDigest: boolean,
 	botId: string,
+	introText?: string,
 ): Promise<void> {
 	const displayName = mapping.name;
 	const pageUrl = mapping.pageUrl;
@@ -261,7 +136,18 @@ async function postChapter(
 		console.log(`  → ${events.length} new event(s) not yet posted`);
 	}
 
-	const blocks = buildBlocks(displayName, pageUrl, events, isWeeklyDigest);
+	// An intro over Slack's section-text limit would fail the whole post with
+	// invalid_blocks — degrade to posting without it instead.
+	if (introText && introText.length > MAX_INTRO_LENGTH) {
+		console.warn(
+			`  → Reviewer intro for ${displayName} exceeds ${MAX_INTRO_LENGTH} characters, posting without it`,
+		);
+		introText = undefined;
+	}
+	const blocks = buildBlocks(displayName, pageUrl, events, isWeeklyDigest, introText);
+	if (introText) {
+		console.log(`  → Including reviewer intro for ${displayName}`);
+	}
 	const fallbackText =
 		events.length > 0
 			? `📅 Upcoming Events — ${displayName}: ${events.length} event(s) this week.`
@@ -320,11 +206,54 @@ async function main(): Promise<void> {
 	const slack = new WebClient(SLACK_BOT_TOKEN);
 	const botId = await getBotId(slack);
 
+	// Intros ride along with the Monday weekly digest only. Pull them from the
+	// review channel's latest preview thread; failures here degrade to posting
+	// without intros rather than failing the digest.
+	let intros = new Map<string, string>();
+	if (weeklyDigest && REVIEW_CHANNEL_ID) {
+		try {
+			const result = await fetchChannelIntros(
+				slack,
+				REVIEW_CHANNEL_ID,
+				botId,
+				getMostRecentSundayStart(),
+			);
+			intros = result.intros;
+			console.log(`Loaded ${intros.size} chapter intro(s) from review channel`);
+
+			// Tell reviewers the thread is no longer being read. Skipped when a
+			// previous run already said so; failure here shouldn't block the digest.
+			if (result.previewTs && !result.closedNoticePosted) {
+				await slack.chat.postMessage({
+					channel: REVIEW_CHANNEL_ID,
+					thread_ts: result.previewTs,
+					text:
+						`${INTROS_CLOSED_PREFIX} — the Monday digest is posting now with ` +
+						`${intros.size} intro(s). Further replies and edits won't be picked up.`,
+					unfurl_links: false,
+					unfurl_media: false,
+				});
+				console.log("Posted intros-closed notice to the preview thread");
+			}
+		} catch (err) {
+			console.warn(
+				"Could not load intros from review channel, posting without them:",
+				err instanceof Error ? err.message : err,
+			);
+		}
+	}
+
 	let anyFailed = false;
 
 	for (const mapping of mappings) {
 		try {
-			await postChapter(slack, mapping, weeklyDigest, botId);
+			await postChapter(
+				slack,
+				mapping,
+				weeklyDigest,
+				botId,
+				intros.get(mapping.channelId),
+			);
 		} catch (err) {
 			console.error(`Failed to post events for chapter ${mapping.name}:`, err);
 			anyFailed = true;

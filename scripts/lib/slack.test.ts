@@ -8,9 +8,13 @@ import {
 } from "vitest";
 import type { WebClient } from "@slack/web-api";
 import {
+	INTROS_CLOSED_PREFIX,
+	PREVIEW_METADATA_EVENT_TYPE,
+	fetchChannelIntros,
 	fetchPostedEventUrls,
 	getBotId,
 	isChannelAccessError,
+	parseChannelIntros,
 } from "./slack.js";
 
 describe("isChannelAccessError", () => {
@@ -218,5 +222,297 @@ describe("fetchPostedEventUrls", () => {
 		]);
 		const result = await fetchPostedEventUrls(slack, "C1", BOT_ID, SINCE);
 		expect(result).toEqual(new Set(["https://example.com/e/1"]));
+	});
+});
+
+describe("parseChannelIntros", () => {
+	it("maps a channel mention to the remaining trimmed text", () => {
+		const result = parseChannelIntros([
+			"<#C0123456|chapter-events> Big week ahead, come say hi!",
+		]);
+		expect(result).toEqual(
+			new Map([["C0123456", "Big week ahead, come say hi!"]]),
+		);
+	});
+
+	it("handles a bare mention with no channel name", () => {
+		const result = parseChannelIntros(["<#C0123456> Welcome"]);
+		expect(result).toEqual(new Map([["C0123456", "Welcome"]]));
+	});
+
+	it("applies one reply to every channel mentioned at the start", () => {
+		const result = parseChannelIntros([
+			"<#C0000001|a> <#C0000002|b> Shared announcement",
+		]);
+		expect(result).toEqual(
+			new Map([
+				["C0000001", "Shared announcement"],
+				["C0000002", "Shared announcement"],
+			]),
+		);
+	});
+
+	it("allows commas between leading channel mentions", () => {
+		const result = parseChannelIntros([
+			"<#C0000001|a>, <#C0000002|b>, <#C0000003|c> Same intro for all three",
+		]);
+		expect(result).toEqual(
+			new Map([
+				["C0000001", "Same intro for all three"],
+				["C0000002", "Same intro for all three"],
+				["C0000003", "Same intro for all three"],
+			]),
+		);
+	});
+
+	it("ignores replies with no channel mention", () => {
+		expect(parseChannelIntros(["just a comment, no channel"])).toEqual(
+			new Map(),
+		);
+	});
+
+	it("ignores replies that are only a mention with no intro text", () => {
+		expect(parseChannelIntros(["<#C0123456|chapter-events>   "])).toEqual(
+			new Map(),
+		);
+	});
+
+	it("lets a later reply override an earlier one for the same channel", () => {
+		const result = parseChannelIntros([
+			"<#C0123456|c> first draft",
+			"<#C0123456|c> revised intro",
+		]);
+		expect(result).toEqual(new Map([["C0123456", "revised intro"]]));
+	});
+
+	it("ignores replies whose only mention appears mid-text", () => {
+		expect(
+			parseChannelIntros(["Reminder for <#C0123456|c> tonight"]),
+		).toEqual(new Map());
+	});
+
+	it("keeps mid-text mentions verbatim in the intro and does not target them", () => {
+		const result = parseChannelIntros([
+			"<#C0000001|a> Joint social with <#C0000002|b> on Friday",
+		]);
+		expect(result).toEqual(
+			new Map([["C0000001", "Joint social with <#C0000002|b> on Friday"]]),
+		);
+	});
+});
+
+describe("fetchChannelIntros", () => {
+	const BOT_ID = "B12345";
+	const SINCE = new Date("2026-01-18T00:00:00Z");
+
+	function mockSlack(
+		historyMessages: Array<Record<string, unknown>>,
+		replyMessages: Array<Record<string, unknown>>,
+	) {
+		const history = vi.fn().mockResolvedValue({ messages: historyMessages });
+		const replies = vi.fn().mockResolvedValue({ messages: replyMessages });
+		const slack = {
+			conversations: { history, replies },
+		} as unknown as WebClient;
+		return { slack, history, replies };
+	}
+
+	it("returns intros from the latest preview thread, keyed by channel", async () => {
+		const { slack, replies } = mockSlack(
+			[{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events* — 3 event(s)" }],
+			[
+				{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events* — 3 event(s)" },
+				{ user: "U1", ts: "101.0", text: "<#C0000001|a> Welcome to the chapter" },
+			],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.intros).toEqual(
+			new Map([["C0000001", "Welcome to the chapter"]]),
+		);
+		expect(result.previewTs).toBe("100.0");
+		expect(result.closedNoticePosted).toBe(false);
+		expect(replies).toHaveBeenCalledWith(
+			expect.objectContaining({ channel: "REVIEW", ts: "100.0" }),
+		);
+	});
+
+	it("returns empty intros and a null previewTs when no preview post is present", async () => {
+		const { slack, replies } = mockSlack(
+			[{ user: "U1", ts: "50.0", text: "unrelated chatter" }],
+			[],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.intros).toEqual(new Map());
+		expect(result.previewTs).toBeNull();
+		expect(result.closedNoticePosted).toBe(false);
+		expect(replies).not.toHaveBeenCalled();
+	});
+
+	it("ignores the root message and the bot's own thread replies", async () => {
+		const { slack } = mockSlack(
+			[{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" }],
+			[
+				{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" },
+				{ bot_id: BOT_ID, ts: "102.0", text: "<#C0000009|bot> should be ignored" },
+				{ user: "U1", ts: "103.0", text: "<#C0000001|a> real intro" },
+			],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.intros).toEqual(new Map([["C0000001", "real intro"]]));
+	});
+
+	it("detects an intros-closed notice already posted by the bot", async () => {
+		const { slack } = mockSlack(
+			[{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" }],
+			[
+				{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" },
+				{ user: "U1", ts: "101.0", text: "<#C0000001|a> intro" },
+				{
+					bot_id: BOT_ID,
+					ts: "102.0",
+					text: `${INTROS_CLOSED_PREFIX} — the Monday digest is posting now with 1 intro(s).`,
+				},
+			],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.closedNoticePosted).toBe(true);
+		expect(result.intros).toEqual(new Map([["C0000001", "intro"]]));
+	});
+
+	it("passes `oldest` as the since timestamp in seconds", async () => {
+		const { slack, history } = mockSlack([], []);
+		await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(history).toHaveBeenCalledWith(
+			expect.objectContaining({
+				channel: "REVIEW",
+				oldest: String(SINCE.getTime() / 1000),
+				limit: 200,
+			}),
+		);
+	});
+
+	function previewMeta(weekly: boolean) {
+		return {
+			event_type: PREVIEW_METADATA_EVENT_TYPE,
+			event_payload: { weekly },
+		};
+	}
+
+	it("prefers the metadata-tagged weekly preview over a newer mid-week preview", async () => {
+		const { slack, replies } = mockSlack(
+			[
+				// Newest first, as conversations.history returns them.
+				{
+					bot_id: BOT_ID,
+					ts: "200.0",
+					text: "*Preview: Scope 1008 Events* — mid-week",
+					metadata: previewMeta(false),
+				},
+				{
+					bot_id: BOT_ID,
+					ts: "100.0",
+					text: "*Preview: Scope 1008 Events* — weekly",
+					metadata: previewMeta(true),
+				},
+			],
+			[{ user: "U1", ts: "101.0", text: "<#C0000001|a> Sunday intro" }],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.previewTs).toBe("100.0");
+		expect(result.intros).toEqual(new Map([["C0000001", "Sunday intro"]]));
+		expect(replies).toHaveBeenCalledWith(
+			expect.objectContaining({ ts: "100.0" }),
+		);
+	});
+
+	it("skips a metadata-tagged non-weekly preview even when no weekly-tagged one exists", async () => {
+		const { slack } = mockSlack(
+			[
+				{
+					bot_id: BOT_ID,
+					ts: "200.0",
+					text: "*Preview: Scope 1008 Events* — mid-week",
+					metadata: previewMeta(false),
+				},
+				// Pre-metadata weekly preview: header text only.
+				{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" },
+			],
+			[{ user: "U1", ts: "101.0", text: "<#C0000001|a> Sunday intro" }],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.previewTs).toBe("100.0");
+	});
+
+	it("requests metadata with channel history", async () => {
+		const { slack, history } = mockSlack([], []);
+		await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(history).toHaveBeenCalledWith(
+			expect.objectContaining({ include_all_metadata: true }),
+		);
+	});
+
+	it("paginates channel history to find a preview beyond the first page", async () => {
+		const history = vi
+			.fn()
+			.mockResolvedValueOnce({
+				messages: [{ user: "U1", ts: "300.0", text: "chatter" }],
+				response_metadata: { next_cursor: "cursor-1" },
+			})
+			.mockResolvedValueOnce({
+				messages: [
+					{
+						bot_id: BOT_ID,
+						ts: "100.0",
+						text: "*Preview: Scope 1008 Events*",
+						metadata: previewMeta(true),
+					},
+				],
+			});
+		const replies = vi.fn().mockResolvedValue({
+			messages: [{ user: "U1", ts: "101.0", text: "<#C0000001|a> intro" }],
+		});
+		const slack = {
+			conversations: { history, replies },
+		} as unknown as WebClient;
+
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(history).toHaveBeenCalledTimes(2);
+		expect(history).toHaveBeenLastCalledWith(
+			expect.objectContaining({ cursor: "cursor-1" }),
+		);
+		expect(result.previewTs).toBe("100.0");
+		expect(result.intros).toEqual(new Map([["C0000001", "intro"]]));
+	});
+
+	it("paginates thread replies", async () => {
+		const history = vi.fn().mockResolvedValue({
+			messages: [
+				{
+					bot_id: BOT_ID,
+					ts: "100.0",
+					text: "*Preview: Scope 1008 Events*",
+					metadata: previewMeta(true),
+				},
+			],
+		});
+		const replies = vi
+			.fn()
+			.mockResolvedValueOnce({
+				messages: [{ user: "U1", ts: "101.0", text: "<#C0000001|a> first draft" }],
+				response_metadata: { next_cursor: "cursor-1" },
+			})
+			.mockResolvedValueOnce({
+				messages: [{ user: "U1", ts: "102.0", text: "<#C0000001|a> revised intro" }],
+			});
+		const slack = {
+			conversations: { history, replies },
+		} as unknown as WebClient;
+
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(replies).toHaveBeenCalledTimes(2);
+		expect(replies).toHaveBeenLastCalledWith(
+			expect.objectContaining({ cursor: "cursor-1" }),
+		);
+		expect(result.intros).toEqual(new Map([["C0000001", "revised intro"]]));
 	});
 });

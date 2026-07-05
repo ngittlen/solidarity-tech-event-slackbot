@@ -4,11 +4,13 @@ A GitHub Actions workflow that pulls upcoming events from the [solidarity.tech](
 
 ## How it works
 
-### Nightly preview (9 PM ET)
+### Nightly preview (7 PM ET)
 
-Every night at 9 PM ET, the workflow runs `scripts/preview-scope-events.ts`. It fetches events for a single configurable scope and posts a plain-text list to a designated review channel. The preview is anchored to the next digest's run time and uses the same window the digest will use — Sunday-night previews mirror Monday's weekly digest (next 7 days), while Monday–Saturday-night previews mirror the next morning's "new events" alert (rest of the current week). The message header makes the mode explicit so reviewers know whether they're previewing a weekly digest or a mid-week alert.
+Every night at 7 PM ET, the workflow runs `scripts/preview-scope-events.ts`. It fetches events for a single configurable scope and posts a plain-text list to a designated review channel. The preview is anchored to the next digest's run time and uses the same window the digest will use — Sunday-night previews mirror Monday's weekly digest (next 7 days), while Monday–Saturday-night previews mirror the next morning's "new events" alert (rest of the current week). The message header makes the mode explicit so reviewers know whether they're previewing a weekly digest or a mid-week alert.
 
 This gives reviewers a chance to move misclassified events to the correct chapter or add the `slack-exclude` tag before the digest runs.
+
+The Sunday-night preview also invites reviewers to add a per-chapter intro paragraph to Monday's weekly digest (see [Chapter intros](#chapter-intros-monday-only) below).
 
 ### Daily digest (9 AM ET)
 
@@ -17,6 +19,17 @@ Every day at 9 AM ET, the workflow runs `scripts/post-daily-events.ts`. The beha
 ### Monday — weekly digest
 
 On Mondays the script posts a full digest of all events for the coming 7 days to each configured channel.
+
+#### Chapter intros (Monday only)
+
+Reviewers can prepend a short intro paragraph to any chapter's Monday digest. In the review channel's Sunday-night preview thread, they **reply starting with one or more target chapter channels** — typing `#` lets Slack autocomplete them — followed by the intro text:
+
+```
+#chapter-events Big week ahead — three actions and a new-member social. Come say hi!
+#chapter-a #chapter-b Statewide day of action Saturday — carpool details inside!
+```
+
+When the digest runs Monday morning (with `REVIEW_CHANNEL_ID` set), it finds that preview thread, matches each reply to its chapters by **channel ID** (so typos in the channel name can't misroute an intro), and renders the text as a section block above each targeted chapter's events. Listing several channels at the start of a reply posts the same intro to all of them; to revise an intro, just edit the reply — the digest reads the thread as it stands Monday morning. When the Monday digest starts, the bot replies in the preview thread that intros are closed, so reviewers know further replies and edits won't be picked up. Only the channels at the start of the reply are targets — a channel mentioned mid-sentence stays part of the intro text. Replies that don't match any configured chapter, or that don't start with a channel, are simply ignored — the digest still posts normally. The feature is off when `REVIEW_CHANNEL_ID` is unset.
 
 ### Tuesday–Sunday — new events only
 
@@ -34,7 +47,7 @@ If no new events are found, nothing is posted to that channel. If new events are
 2. **Filters** to events that have a public event page URL, are not tagged `slack-exclude`, do not match any phrase in `EXCLUDE_PHRASES` (title), and have at least one session within the posting window whose location does not match any entry in `EXCLUDE_LOCATIONS`. The posting window is `[now, now + 7 days]` on Mondays and `[now, end-of-current-week]` Tuesday–Sunday.
 3. **Rate limits** requests to the solidarity.tech API at 1 request per second (well within the 2 req/s limit) with a delay between each chapter to avoid throttling
 4. **Sorts** events chronologically by their earliest upcoming session
-5. **Builds a Slack Block Kit message** with a header, week date range, and one section per event showing the title (linked to the event page, with mrkdwn-special characters in the title escaped), session time(s), location, and event type (in-person / virtual / hybrid)
+5. **Builds a Slack Block Kit message** with a header, week date range, and one section per event showing the title (linked to the event page, with mrkdwn-special characters in the title escaped), session time(s), and location. Events are grouped by type — 🏢 In Person first, then 🔀 Hybrid (only when hybrid events exist), then 💻 Virtual — each under its own header, soonest-first within a group. Virtual events with multiple sessions in the window are condensed to their next session plus a "+N more sessions" note.
 6. **Posts** the message to the mapped Slack channel for each chapter, skipping the channel if the bot can't read or post to it
 
 Re-running the workflow on the same day is always safe:
@@ -42,7 +55,7 @@ Re-running the workflow on the same day is always safe:
 - **On Mondays**, the script checks each channel for an existing post from this bot today (matched by `bot_id`) and skips the chapter if the weekly digest has already been delivered.
 - **Tuesday–Sunday**, idempotency falls out of the URL-dedup step: every event URL this bot has posted since Monday is collected, and the filter drops events whose URLs are already in that set — so a second mid-week run on the same day ends up with nothing to post and exits early.
 
-If more than 23 events fall in the window, the first 23 are shown with a note indicating how many were omitted (Slack has a 50-block-per-message limit).
+If more events fall in the window than fit (roughly the first 20, depending on how many section headers and intro blocks are present), the rest are dropped with a note indicating how many were omitted (Slack has a 50-block-per-message limit).
 
 ### Example Slack messages
 
@@ -51,13 +64,17 @@ If more than 23 events fall in the window, the first 23 are shown with a note in
 📅 Upcoming Events — Washtenaw County
 This week · Mar 10 – Mar 16 · All Events ↗
 
+🏢 In Person
+
 *<https://solidarity.tech/events/123|Monthly Organizing Meeting>*
-📅 *Sat, Mar 15 · 10:00 AM–11:30 AM EDT*   📍 _123 Main St, Ann Arbor, MI_   🏢 In Person
+📅 *Sat, Mar 15 · 10:00 AM–11:30 AM EDT*   📍 _123 Main St, Ann Arbor, MI_
 
 ────────────────────────────────
 
+💻 Virtual
+
 *<https://solidarity.tech/events/456|New Member Orientation>*
-📅 *Wed, Mar 12 · 7:00 PM–8:00 PM EDT*   💻 Virtual
+📅 *Wed, Mar 12 · 7:00 PM–8:00 PM EDT*   _+2 more sessions_
 ```
 
 **Mid-week new event alert:**
@@ -65,8 +82,10 @@ This week · Mar 10 – Mar 16 · All Events ↗
 🆕 New Events This Week — Washtenaw County
 New this week · Mar 10 – Mar 16 · All Events ↗
 
+💻 Virtual
+
 *<https://solidarity.tech/events/789|Emergency Town Hall>*
-📅 *Thu, Mar 13 · 6:00 PM–7:30 PM EDT*   💻 Virtual
+📅 *Thu, Mar 13 · 6:00 PM–7:30 PM EDT*
 ```
 
 ## Setup
@@ -145,7 +164,7 @@ A JSON array where each object has:
 
 ### 4. (Optional) Adjust the posting times
 
-- **Nightly preview**: `.github/workflows/preview-scope-events.yml` defaults to `0 1 * * *` (9 PM ET / UTC-4 EDT)
+- **Nightly preview**: `.github/workflows/preview-scope-events.yml` defaults to `0 23 * * *` (7 PM ET / UTC-4 EDT)
 - **Daily digest**: `.github/workflows/daily-events.yml` defaults to `0 14 * * *` (9 AM ET / UTC-5 EST)
 
 Adjust both cron expressions for your timezone or daylight saving time as needed.
@@ -219,7 +238,7 @@ The suite (vitest) covers the filter, pagination, formatters/escape helpers, exc
 ├── .github/
 │   └── workflows/
 │       ├── daily-events.yml           # Daily digest workflow (9 AM ET)
-│       └── preview-scope-events.yml   # Nightly preview workflow (9 PM ET)
+│       └── preview-scope-events.yml   # Nightly preview workflow (7 PM ET)
 ├── .env.sample                # Environment variable template
 ├── package.json
 └── tsconfig.json

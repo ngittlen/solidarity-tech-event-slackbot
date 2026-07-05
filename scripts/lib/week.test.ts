@@ -142,9 +142,9 @@ describe("computeDigestWindow", () => {
 	});
 
 	it("the preview's window matches the digest's when anchored to the next fire", () => {
-		// Preview at 9 PM ET Sunday (01:00 UTC Mon) should produce the same
+		// Preview at ~7 PM ET Sunday (23:00 UTC Sun) should produce the same
 		// (nowMs, cutoffMs) as the digest run at 14:00 UTC Mon.
-		const previewTime = new Date("2026-01-12T01:00:00Z");
+		const previewTime = new Date("2026-01-11T23:00:00Z");
 		const previewRunAt = nextDigestFire(previewTime);
 		const previewWindow = computeDigestWindow(previewRunAt);
 

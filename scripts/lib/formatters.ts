@@ -61,17 +61,41 @@ export function deriveEventType(event: {
 	return (event.event_type ?? "").toLowerCase();
 }
 
-export function eventTypeLabel(eventType: string | null | undefined): string {
+export type NormalizedEventType = "in_person" | "virtual" | "hybrid";
+
+// Collapses the API's event-type spellings ("in-person", "online", casing)
+// onto the three canonical types, or null when the value is unrecognized.
+export function normalizeEventType(
+	eventType: string | null | undefined,
+): NormalizedEventType | null {
 	switch ((eventType ?? "").toLowerCase()) {
 		case "in_person":
 		case "in-person":
-			return "🏢 In Person";
+			return "in_person";
 		case "virtual":
 		case "online":
-			return "💻 Virtual";
+			return "virtual";
 		case "hybrid":
-			return "🔀 Hybrid";
+			return "hybrid";
 		default:
-			return "";
+			return null;
 	}
+}
+
+// Emoji and label kept separate so callers can style the label (e.g. the
+// digest bolds it in section headers) without duplicating the mapping.
+export const EVENT_TYPE_LABELS: Record<
+	NormalizedEventType,
+	{ emoji: string; label: string }
+> = {
+	in_person: { emoji: "🏢", label: "In Person" },
+	virtual: { emoji: "💻", label: "Virtual" },
+	hybrid: { emoji: "🔀", label: "Hybrid" },
+};
+
+export function eventTypeLabel(eventType: string | null | undefined): string {
+	const normalized = normalizeEventType(eventType);
+	if (!normalized) return "";
+	const { emoji, label } = EVENT_TYPE_LABELS[normalized];
+	return `${emoji} ${label}`;
 }
