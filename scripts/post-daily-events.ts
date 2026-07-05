@@ -8,7 +8,7 @@ import {
 } from "./lib/solidarity-api.js";
 import { EXCLUDE_LOCATIONS, EXCLUDE_PHRASES } from "./lib/exclusions.js";
 import { filterEventsInWindow } from "./lib/filters.js";
-import { buildBlocks } from "./lib/digest.js";
+import { MAX_INTRO_LENGTH, buildBlocks } from "./lib/digest.js";
 import {
 	computeDigestWindow,
 	getMondayOfCurrentWeek,
@@ -136,6 +136,14 @@ async function postChapter(
 		console.log(`  → ${events.length} new event(s) not yet posted`);
 	}
 
+	// An intro over Slack's section-text limit would fail the whole post with
+	// invalid_blocks — degrade to posting without it instead.
+	if (introText && introText.length > MAX_INTRO_LENGTH) {
+		console.warn(
+			`  → Reviewer intro for ${displayName} exceeds ${MAX_INTRO_LENGTH} characters, posting without it`,
+		);
+		introText = undefined;
+	}
 	const blocks = buildBlocks(displayName, pageUrl, events, isWeeklyDigest, introText);
 	if (introText) {
 		console.log(`  → Including reviewer intro for ${displayName}`);

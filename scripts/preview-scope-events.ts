@@ -22,6 +22,7 @@ import {
 } from "./lib/week.js";
 import {
 	PREVIEW_HEADER_PREFIX,
+	PREVIEW_METADATA_EVENT_TYPE,
 	fetchPostedEventUrls,
 	getBotId,
 } from "./lib/slack.js";
@@ -43,9 +44,9 @@ const SCOPE_ID = Number(process.env.PREVIEW_SCOPE_ID ?? "");
 // Slack autocomplete the target chapter channels, which the digest matches by
 // channel ID.
 const INTRO_PROMPT =
-	"💬 *Add an intro to Monday's digest:* reply in this thread starting with one or more chapter channels " +
-	"(type `#` and pick them), then your intro text — e.g. `#chapter-a (#chapter-b #chapter-c etc) Big week ahead!` " +
-	"posts the same intro to all chapters.";
+	"💬 *Add an intro to Monday's digest:* reply in this thread starting with a chapter channel " +
+	"(type `#` and pick it), then your intro text — e.g. `#chapter-a Big week ahead!` " +
+	"Start with several channels to post the same intro to all of them: `#chapter-a #chapter-b Big week ahead!`";
 
 function buildMessage(events: SolidarityEvent[], runAt: Date, isWeekly: boolean): string {
 	const tomorrowStr = `${SHORT_WEEKDAY.format(runAt)}, ${SHORT_DATE.format(runAt)}`;
@@ -147,6 +148,12 @@ async function main(): Promise<void> {
 		text,
 		unfurl_links: false,
 		unfurl_media: false,
+		// Tags the post so the Monday digest can find the weekly preview thread
+		// (where reviewers leave intros) without matching mid-week previews.
+		metadata: {
+			event_type: PREVIEW_METADATA_EVENT_TYPE,
+			event_payload: { weekly: isWeekly },
+		},
 	});
 
 	console.log(`Posted preview to channel ${REVIEW_CHANNEL_ID}`);

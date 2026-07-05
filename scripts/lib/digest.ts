@@ -1,10 +1,13 @@
 import type { Block as SlackBlock, KnownBlock } from "@slack/types";
 import type { SolidarityEvent } from "./types.js";
 import {
+	EVENT_TYPE_LABELS,
 	SHORT_DATE,
+	type NormalizedEventType,
 	deriveEventType,
 	escapeLinkLabel,
 	formatDateRange,
+	normalizeEventType,
 } from "./formatters.js";
 import { getMondayOfCurrentWeek, getSundayOfCurrentWeek } from "./week.js";
 
@@ -12,24 +15,30 @@ import { getMondayOfCurrentWeek, getSundayOfCurrentWeek } from "./week.js";
 // minus 1 for the removed trailing divider, minus 1 for a possible overflow notice
 // → max 23 events before needing to reserve a block for the overflow notice.
 // The intro block and each section header (up to 3) further lower the budget.
-const MAX_GROUPS = 23;
+const MAX_EVENTS = 23;
+
+// Slack rejects a section block whose text exceeds 3,000 characters. Callers
+// should drop (not truncate) reviewer intros longer than this rather than let
+// the whole digest post fail.
+export const MAX_INTRO_LENGTH = 3000;
 
 // The digest splits events into sections: in-person at the top, hybrid in the
 // middle (only when hybrid events exist), virtual at the bottom. Events with
 // no recognizable type are shown with the in-person section.
-type EventGroup = "in_person" | "hybrid" | "virtual";
+type EventGroup = NormalizedEventType;
 const GROUP_ORDER: EventGroup[] = ["in_person", "hybrid", "virtual"];
-const GROUP_HEADERS: Record<EventGroup, string> = {
-	in_person: "🏢 *In Person*",
-	hybrid: "🔀 *Hybrid*",
-	virtual: "💻 *Virtual*",
-};
+
+// Section header: the shared type emoji with just the label bolded.
+function groupHeader(group: EventGroup): string {
+	const { emoji, label } = EVENT_TYPE_LABELS[group];
+	return `${emoji} *${label}*`;
+}
 
 function eventGroup(event: SolidarityEvent): EventGroup {
-	const t = (event.derivedEventType ?? deriveEventType(event)).toLowerCase();
-	if (t === "hybrid") return "hybrid";
-	if (t === "virtual" || t === "online") return "virtual";
-	return "in_person";
+	return (
+		normalizeEventType(event.derivedEventType ?? deriveEventType(event)) ??
+		"in_person"
+	);
 }
 
 function formatWeekRange(): string {
@@ -109,12 +118,13 @@ export function buildBlocks(
 
 	// The intro block and each section header consume a block, so they lower
 	// how many events we can show.
-	const maxGroups = MAX_GROUPS - introBlocks.length - grouped.length;
+	const maxVisibleEvents = MAX_EVENTS - introBlocks.length - grouped.length;
 	const ordered = grouped.flatMap(({ group, events: groupEvents }) =>
 		groupEvents.map((event) => ({ event, group })),
 	);
-	const overflow = ordered.length > maxGroups ? ordered.length - maxGroups : 0;
-	const visible = overflow > 0 ? ordered.slice(0, maxGroups) : ordered;
+	const overflow =
+		ordered.length > maxVisibleEvents ? ordered.length - maxVisibleEvents : 0;
+	const visible = overflow > 0 ? ordered.slice(0, maxVisibleEvents) : ordered;
 
 	const eventBlocks: (KnownBlock | SlackBlock)[] = [];
 	let currentGroup: EventGroup | null = null;
@@ -122,7 +132,7 @@ export function buildBlocks(
 		if (group !== currentGroup) {
 			eventBlocks.push({
 				type: "context",
-				elements: [{ type: "mrkdwn", text: GROUP_HEADERS[group] }],
+				elements: [{ type: "mrkdwn", text: groupHeader(group) }],
 			});
 			currentGroup = group;
 		}

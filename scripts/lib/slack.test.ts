@@ -9,6 +9,7 @@ import {
 import type { WebClient } from "@slack/web-api";
 import {
 	INTROS_CLOSED_PREFIX,
+	PREVIEW_METADATA_EVENT_TYPE,
 	fetchChannelIntros,
 	fetchPostedEventUrls,
 	getBotId,
@@ -388,5 +389,130 @@ describe("fetchChannelIntros", () => {
 				limit: 200,
 			}),
 		);
+	});
+
+	function previewMeta(weekly: boolean) {
+		return {
+			event_type: PREVIEW_METADATA_EVENT_TYPE,
+			event_payload: { weekly },
+		};
+	}
+
+	it("prefers the metadata-tagged weekly preview over a newer mid-week preview", async () => {
+		const { slack, replies } = mockSlack(
+			[
+				// Newest first, as conversations.history returns them.
+				{
+					bot_id: BOT_ID,
+					ts: "200.0",
+					text: "*Preview: Scope 1008 Events* — mid-week",
+					metadata: previewMeta(false),
+				},
+				{
+					bot_id: BOT_ID,
+					ts: "100.0",
+					text: "*Preview: Scope 1008 Events* — weekly",
+					metadata: previewMeta(true),
+				},
+			],
+			[{ user: "U1", ts: "101.0", text: "<#C0000001|a> Sunday intro" }],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.previewTs).toBe("100.0");
+		expect(result.intros).toEqual(new Map([["C0000001", "Sunday intro"]]));
+		expect(replies).toHaveBeenCalledWith(
+			expect.objectContaining({ ts: "100.0" }),
+		);
+	});
+
+	it("skips a metadata-tagged non-weekly preview even when no weekly-tagged one exists", async () => {
+		const { slack } = mockSlack(
+			[
+				{
+					bot_id: BOT_ID,
+					ts: "200.0",
+					text: "*Preview: Scope 1008 Events* — mid-week",
+					metadata: previewMeta(false),
+				},
+				// Pre-metadata weekly preview: header text only.
+				{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" },
+			],
+			[{ user: "U1", ts: "101.0", text: "<#C0000001|a> Sunday intro" }],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.previewTs).toBe("100.0");
+	});
+
+	it("requests metadata with channel history", async () => {
+		const { slack, history } = mockSlack([], []);
+		await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(history).toHaveBeenCalledWith(
+			expect.objectContaining({ include_all_metadata: true }),
+		);
+	});
+
+	it("paginates channel history to find a preview beyond the first page", async () => {
+		const history = vi
+			.fn()
+			.mockResolvedValueOnce({
+				messages: [{ user: "U1", ts: "300.0", text: "chatter" }],
+				response_metadata: { next_cursor: "cursor-1" },
+			})
+			.mockResolvedValueOnce({
+				messages: [
+					{
+						bot_id: BOT_ID,
+						ts: "100.0",
+						text: "*Preview: Scope 1008 Events*",
+						metadata: previewMeta(true),
+					},
+				],
+			});
+		const replies = vi.fn().mockResolvedValue({
+			messages: [{ user: "U1", ts: "101.0", text: "<#C0000001|a> intro" }],
+		});
+		const slack = {
+			conversations: { history, replies },
+		} as unknown as WebClient;
+
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(history).toHaveBeenCalledTimes(2);
+		expect(history).toHaveBeenLastCalledWith(
+			expect.objectContaining({ cursor: "cursor-1" }),
+		);
+		expect(result.previewTs).toBe("100.0");
+		expect(result.intros).toEqual(new Map([["C0000001", "intro"]]));
+	});
+
+	it("paginates thread replies", async () => {
+		const history = vi.fn().mockResolvedValue({
+			messages: [
+				{
+					bot_id: BOT_ID,
+					ts: "100.0",
+					text: "*Preview: Scope 1008 Events*",
+					metadata: previewMeta(true),
+				},
+			],
+		});
+		const replies = vi
+			.fn()
+			.mockResolvedValueOnce({
+				messages: [{ user: "U1", ts: "101.0", text: "<#C0000001|a> first draft" }],
+				response_metadata: { next_cursor: "cursor-1" },
+			})
+			.mockResolvedValueOnce({
+				messages: [{ user: "U1", ts: "102.0", text: "<#C0000001|a> revised intro" }],
+			});
+		const slack = {
+			conversations: { history, replies },
+		} as unknown as WebClient;
+
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(replies).toHaveBeenCalledTimes(2);
+		expect(replies).toHaveBeenLastCalledWith(
+			expect.objectContaining({ cursor: "cursor-1" }),
+		);
+		expect(result.intros).toEqual(new Map([["C0000001", "revised intro"]]));
 	});
 });

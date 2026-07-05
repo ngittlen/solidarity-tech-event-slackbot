@@ -37,6 +37,24 @@ export async function getBotId(slack: WebClient): Promise<string> {
 // thread holds reviewer-authored intros. Both must stay in sync.
 export const PREVIEW_HEADER_PREFIX = "*Preview: Scope";
 
+// Slack message-metadata event type attached to every preview post. The
+// payload's `weekly` flag distinguishes the Sunday-night weekly preview (whose
+// thread collects intros) from mid-week and manually dispatched previews, so
+// the digest can't latch onto the wrong thread.
+export const PREVIEW_METADATA_EVENT_TYPE = "scope_preview";
+
+// Reads a preview post's metadata: null when the message isn't a
+// metadata-tagged preview, otherwise whether it's the weekly one.
+function previewMetadata(
+	message: Record<string, unknown>,
+): { weekly: boolean } | null {
+	const metadata = message["metadata"] as
+		| { event_type?: unknown; event_payload?: { weekly?: unknown } }
+		| undefined;
+	if (metadata?.event_type !== PREVIEW_METADATA_EVENT_TYPE) return null;
+	return { weekly: metadata.event_payload?.weekly === true };
+}
+
 // Matches Slack mrkdwn links: <url> or <url|label>
 const URL_PATTERN = /<(https?:\/\/[^|>\s]+)[|>]/g;
 
@@ -95,33 +113,38 @@ export async function fetchChannelIntros(
 	botId: string,
 	since: Date,
 ): Promise<ChannelIntrosResult> {
-	const oldest = String(since.getTime() / 1000);
+	const messages = await fetchHistorySince(slack, reviewChannelId, since);
 
-	const result = await slack.conversations.history({
-		channel: reviewChannelId,
-		oldest,
-		limit: 200,
-	});
-	const messages = (result.messages ?? []) as Record<string, unknown>[];
-
-	// history returns newest-first, so the first match is the latest preview.
-	const previewRoot = messages.find(
-		(m) =>
-			m["bot_id"] === botId &&
-			typeof m["text"] === "string" &&
-			(m["text"] as string).startsWith(PREVIEW_HEADER_PREFIX),
-	);
+	// history returns newest-first (pages go back in time), so the first match
+	// is the latest weekly preview.
+	const isPreviewText = (m: Record<string, unknown>) =>
+		typeof m["text"] === "string" &&
+		(m["text"] as string).startsWith(PREVIEW_HEADER_PREFIX);
+	const previewRoot =
+		messages.find((m) => m["bot_id"] === botId && previewMetadata(m)?.weekly) ??
+		// Fallback for previews posted before metadata was added: match by header
+		// text, but never a message whose metadata marks it a non-weekly preview.
+		messages.find(
+			(m) => m["bot_id"] === botId && isPreviewText(m) && !previewMetadata(m),
+		);
 	if (!previewRoot) {
 		return { intros: new Map(), previewTs: null, closedNoticePosted: false };
 	}
 
 	const ts = previewRoot["ts"] as string;
-	const replies = await slack.conversations.replies({
-		channel: reviewChannelId,
-		ts,
-		limit: 200,
-	});
-	const replyMessages = (replies.messages ?? []) as Record<string, unknown>[];
+	const replyMessages: Record<string, unknown>[] = [];
+	let cursor: string | undefined;
+	do {
+		const replies = await slack.conversations.replies({
+			channel: reviewChannelId,
+			ts,
+			limit: 200,
+			...(cursor ? { cursor } : {}),
+		});
+		replyMessages.push(...((replies.messages ?? []) as Record<string, unknown>[]));
+		cursor = (replies.response_metadata as Record<string, string> | undefined)
+			?.next_cursor;
+	} while (cursor);
 
 	const texts = replyMessages
 		.filter((m) => m["ts"] !== ts && m["bot_id"] !== botId)
@@ -139,16 +162,15 @@ export async function fetchChannelIntros(
 	return { intros: parseChannelIntros(texts), previewTs: ts, closedNoticePosted };
 }
 
-// Reads channel history since `since` and returns the set of URLs that have
-// already appeared in messages from `botId`. Scans both the plain mrkdwn body
-// (`msg.text`, used by preview-style posts) and section blocks (Block Kit
-// digest-style posts).
-export async function fetchPostedEventUrls(
+// Reads the full channel history since `since`, following pagination cursors.
+// Pages are returned newest-first and later pages are older, so the combined
+// list stays newest-first. Metadata is included so callers can identify
+// metadata-tagged posts (e.g. the weekly preview).
+async function fetchHistorySince(
 	slack: WebClient,
 	channelId: string,
-	botId: string,
 	since: Date,
-): Promise<Set<string>> {
+): Promise<Record<string, unknown>[]> {
 	const oldest = String(since.getTime() / 1000);
 
 	const allMessages: Record<string, unknown>[] = [];
@@ -159,12 +181,28 @@ export async function fetchPostedEventUrls(
 			channel: channelId,
 			oldest,
 			limit: 200,
+			include_all_metadata: true,
 			...(cursor ? { cursor } : {}),
 		});
 		allMessages.push(...((result.messages ?? []) as Record<string, unknown>[]));
 		cursor = (result.response_metadata as Record<string, string> | undefined)
 			?.next_cursor;
 	} while (cursor);
+
+	return allMessages;
+}
+
+// Reads channel history since `since` and returns the set of URLs that have
+// already appeared in messages from `botId`. Scans both the plain mrkdwn body
+// (`msg.text`, used by preview-style posts) and section blocks (Block Kit
+// digest-style posts).
+export async function fetchPostedEventUrls(
+	slack: WebClient,
+	channelId: string,
+	botId: string,
+	since: Date,
+): Promise<Set<string>> {
+	const allMessages = await fetchHistorySince(slack, channelId, since);
 
 	const urls = new Set<string>();
 	const collectFrom = (text: string) => {
