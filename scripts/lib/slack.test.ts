@@ -8,6 +8,7 @@ import {
 } from "vitest";
 import type { WebClient } from "@slack/web-api";
 import {
+	INTROS_CLOSED_PREFIX,
 	fetchChannelIntros,
 	fetchPostedEventUrls,
 	getBotId,
@@ -238,7 +239,7 @@ describe("parseChannelIntros", () => {
 		expect(result).toEqual(new Map([["C0123456", "Welcome"]]));
 	});
 
-	it("applies one reply to every channel it mentions", () => {
+	it("applies one reply to every channel mentioned at the start", () => {
 		const result = parseChannelIntros([
 			"<#C0000001|a> <#C0000002|b> Shared announcement",
 		]);
@@ -246,6 +247,19 @@ describe("parseChannelIntros", () => {
 			new Map([
 				["C0000001", "Shared announcement"],
 				["C0000002", "Shared announcement"],
+			]),
+		);
+	});
+
+	it("allows commas between leading channel mentions", () => {
+		const result = parseChannelIntros([
+			"<#C0000001|a>, <#C0000002|b>, <#C0000003|c> Same intro for all three",
+		]);
+		expect(result).toEqual(
+			new Map([
+				["C0000001", "Same intro for all three"],
+				["C0000002", "Same intro for all three"],
+				["C0000003", "Same intro for all three"],
 			]),
 		);
 	});
@@ -270,9 +284,19 @@ describe("parseChannelIntros", () => {
 		expect(result).toEqual(new Map([["C0123456", "revised intro"]]));
 	});
 
-	it("keeps a mention that appears mid-text as the intro's channel", () => {
-		const result = parseChannelIntros(["Reminder for <#C0123456|c> tonight"]);
-		expect(result).toEqual(new Map([["C0123456", "Reminder for  tonight"]]));
+	it("ignores replies whose only mention appears mid-text", () => {
+		expect(
+			parseChannelIntros(["Reminder for <#C0123456|c> tonight"]),
+		).toEqual(new Map());
+	});
+
+	it("keeps mid-text mentions verbatim in the intro and does not target them", () => {
+		const result = parseChannelIntros([
+			"<#C0000001|a> Joint social with <#C0000002|b> on Friday",
+		]);
+		expect(result).toEqual(
+			new Map([["C0000001", "Joint social with <#C0000002|b> on Friday"]]),
+		);
 	});
 });
 
@@ -301,19 +325,25 @@ describe("fetchChannelIntros", () => {
 			],
 		);
 		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
-		expect(result).toEqual(new Map([["C0000001", "Welcome to the chapter"]]));
+		expect(result.intros).toEqual(
+			new Map([["C0000001", "Welcome to the chapter"]]),
+		);
+		expect(result.previewTs).toBe("100.0");
+		expect(result.closedNoticePosted).toBe(false);
 		expect(replies).toHaveBeenCalledWith(
 			expect.objectContaining({ channel: "REVIEW", ts: "100.0" }),
 		);
 	});
 
-	it("returns an empty map when no preview post is present", async () => {
+	it("returns empty intros and a null previewTs when no preview post is present", async () => {
 		const { slack, replies } = mockSlack(
 			[{ user: "U1", ts: "50.0", text: "unrelated chatter" }],
 			[],
 		);
 		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
-		expect(result).toEqual(new Map());
+		expect(result.intros).toEqual(new Map());
+		expect(result.previewTs).toBeNull();
+		expect(result.closedNoticePosted).toBe(false);
 		expect(replies).not.toHaveBeenCalled();
 	});
 
@@ -327,7 +357,25 @@ describe("fetchChannelIntros", () => {
 			],
 		);
 		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
-		expect(result).toEqual(new Map([["C0000001", "real intro"]]));
+		expect(result.intros).toEqual(new Map([["C0000001", "real intro"]]));
+	});
+
+	it("detects an intros-closed notice already posted by the bot", async () => {
+		const { slack } = mockSlack(
+			[{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" }],
+			[
+				{ bot_id: BOT_ID, ts: "100.0", text: "*Preview: Scope 1008 Events*" },
+				{ user: "U1", ts: "101.0", text: "<#C0000001|a> intro" },
+				{
+					bot_id: BOT_ID,
+					ts: "102.0",
+					text: `${INTROS_CLOSED_PREFIX} — the Monday digest is posting now with 1 intro(s).`,
+				},
+			],
+		);
+		const result = await fetchChannelIntros(slack, "REVIEW", BOT_ID, SINCE);
+		expect(result.closedNoticePosted).toBe(true);
+		expect(result.intros).toEqual(new Map([["C0000001", "intro"]]));
 	});
 
 	it("passes `oldest` as the since timestamp in seconds", async () => {

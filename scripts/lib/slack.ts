@@ -44,35 +44,57 @@ const URL_PATTERN = /<(https?:\/\/[^|>\s]+)[|>]/g;
 // Slack rewrites a typed `#channel-name` into this form on send.
 const CHANNEL_MENTION_PATTERN = /<#(C[A-Z0-9]+)(?:\|[^>]*)?>/g;
 
-// Parses reviewer thread replies into a channelId → intro-text map. A reply
-// contributes an intro to every channel it mentions; the mention tokens are
-// stripped and the remaining text (trimmed) becomes the intro. Replies with no
-// channel mention, or no text once mentions are removed, are ignored. When the
-// same channel is mentioned by multiple replies, the last reply wins so
-// reviewers can correct themselves by replying again.
+// Matches the run of channel mentions (separated by whitespace/commas) at the
+// start of a reply, plus any trailing separators before the intro text.
+const LEADING_MENTIONS_PATTERN = /^(?:[\s,]*<#C[A-Z0-9]+(?:\|[^>]*)?>)+[\s,]*/;
+
+// Parses reviewer thread replies into a channelId → intro-text map. The
+// channel mentions at the start of a reply are its targets — one or several,
+// so the same intro can go to multiple chapters — and everything after them
+// (trimmed) becomes the intro. Mentions appearing later in the text are kept
+// verbatim as part of the intro, not treated as targets. Replies with no
+// leading mention, or no text after the mentions, are ignored. When the same
+// channel is targeted by multiple replies, the last reply wins so reviewers
+// can correct themselves by replying again.
 export function parseChannelIntros(replyTexts: string[]): Map<string, string> {
 	const intros = new Map<string, string>();
 	for (const raw of replyTexts) {
 		if (typeof raw !== "string") continue;
-		const channelIds = [...raw.matchAll(CHANNEL_MENTION_PATTERN)].map((m) => m[1]);
-		if (channelIds.length === 0) continue;
-		const introText = raw.replace(CHANNEL_MENTION_PATTERN, "").trim();
+		const leading = raw.match(LEADING_MENTIONS_PATTERN);
+		if (!leading) continue;
+		const channelIds = [...leading[0].matchAll(CHANNEL_MENTION_PATTERN)].map(
+			(m) => m[1],
+		);
+		const introText = raw.slice(leading[0].length).trim();
 		if (!introText) continue;
 		for (const id of channelIds) intros.set(id, introText);
 	}
 	return intros;
 }
 
+// Prefix of the bot's "intros are closed" reply in the preview thread. Used
+// both to post the notice and to detect that a previous run already posted it
+// (so a re-run doesn't repeat it).
+export const INTROS_CLOSED_PREFIX = "🔒 *Intros are closed*";
+
+export interface ChannelIntrosResult {
+	intros: Map<string, string>;
+	// ts of the preview post whose thread was read; null when no preview found.
+	previewTs: string | null;
+	// True when the bot already posted the intros-closed notice in the thread.
+	closedNoticePosted: boolean;
+}
+
 // Reads the review channel, locates the most recent preview post from `botId`
 // since `since`, and returns the reviewer-authored intros from its thread,
 // keyed by target channel ID. Human replies only — the bot's own messages in
-// the thread are ignored. Returns an empty map when no preview post is found.
+// the thread are ignored. Returns empty intros when no preview post is found.
 export async function fetchChannelIntros(
 	slack: WebClient,
 	reviewChannelId: string,
 	botId: string,
 	since: Date,
-): Promise<Map<string, string>> {
+): Promise<ChannelIntrosResult> {
 	const oldest = String(since.getTime() / 1000);
 
 	const result = await slack.conversations.history({
@@ -89,7 +111,9 @@ export async function fetchChannelIntros(
 			typeof m["text"] === "string" &&
 			(m["text"] as string).startsWith(PREVIEW_HEADER_PREFIX),
 	);
-	if (!previewRoot) return new Map();
+	if (!previewRoot) {
+		return { intros: new Map(), previewTs: null, closedNoticePosted: false };
+	}
 
 	const ts = previewRoot["ts"] as string;
 	const replies = await slack.conversations.replies({
@@ -104,7 +128,15 @@ export async function fetchChannelIntros(
 		.map((m) => m["text"])
 		.filter((t): t is string => typeof t === "string");
 
-	return parseChannelIntros(texts);
+	const closedNoticePosted = replyMessages.some(
+		(m) =>
+			m["ts"] !== ts &&
+			m["bot_id"] === botId &&
+			typeof m["text"] === "string" &&
+			(m["text"] as string).startsWith(INTROS_CLOSED_PREFIX),
+	);
+
+	return { intros: parseChannelIntros(texts), previewTs: ts, closedNoticePosted };
 }
 
 // Reads channel history since `since` and returns the set of URLs that have

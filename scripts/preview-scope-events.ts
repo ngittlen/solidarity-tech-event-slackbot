@@ -40,12 +40,12 @@ const SCOPE_ID = Number(process.env.PREVIEW_SCOPE_ID ?? "");
 
 // Only shown on the Sunday-night weekly preview: intros ride along with
 // Monday's weekly digest only. Reviewers reply in this thread; typing `#` lets
-// Slack autocomplete the target chapter's channel, which the digest matches by
+// Slack autocomplete the target chapter channels, which the digest matches by
 // channel ID.
 const INTRO_PROMPT =
-	"💬 *Add an intro to Monday's digest:* reply in this thread starting with a chapter's channel " +
-	"(type `#` and pick it), then your intro text — e.g. `#chapter-events Big week ahead, come say hi!` " +
-	"One reply per chapter; reply again to a channel to revise it.";
+	"💬 *Add an intro to Monday's digest:* reply in this thread starting with one or more chapter channels " +
+	"(type `#` and pick them), then your intro text — e.g. `#chapter-a (#chapter-b #chapter-c etc) Big week ahead!` " +
+	"posts the same intro to all chapters.";
 
 function buildMessage(events: SolidarityEvent[], runAt: Date, isWeekly: boolean): string {
 	const tomorrowStr = `${SHORT_WEEKDAY.format(runAt)}, ${SHORT_DATE.format(runAt)}`;

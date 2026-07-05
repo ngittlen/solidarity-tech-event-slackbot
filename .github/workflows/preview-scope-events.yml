@@ -1,7 +1,7 @@
 name: Preview Scope Events
 on:
   schedule:
-    - cron: '0 1 * * *'  # 9 PM ET (UTC-4 EDT) — adjust for DST as needed
+    - cron: '0 23 * * *'  # 7 PM ET (UTC-4 EDT) — adjust for DST as needed
   workflow_dispatch:       # Allow manual runs from GitHub UI for testing
 
 jobs:
