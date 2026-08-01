@@ -24,7 +24,7 @@
     "url": "https://github.com/ngittlen/solidarity-tech-event-slackbot/issues"
   },
   "dependencies": {
-    "@slack/types": "^2.20.1",
+    "@slack/types": "^3.0.0",
     "@slack/web-api": "^7.15.2",
     "dotenv": "~17.4.2"
   },
